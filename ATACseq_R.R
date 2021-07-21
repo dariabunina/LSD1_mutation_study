@@ -147,3 +147,84 @@ ggplot(data = hmm_fisher_df, aes(x = id, y = log2(oddR))) + geom_point(color = c
   geom_hline(yintercept = 0, linetype = 2, size = 0.2, alpha = 0.8) + 
   scale_y_continuous(position = "right")
 dev.off()
+
+
+# diffTF_results_visualisation ----------------------------------------------------------
+
+#new run of diffTF is here: /g/scb2/zaugg/bunina/LSD1/ATACseq/output/extension50
+TFresults = read.table(file = file.path(dir1, "bunina/LSD1/ATACseq/output/extension50/LSD1_2019.summary.tsv"), 
+                       header = T, sep = "\t")
+hocoIDs = read.table(file = file.path(dir1, "bunina/LSD1/ATACseq/data", "HOCOTFID2ENSEMBL.txt"), header = T)
+TFresults$ensembl = hocoIDs$ENSEMBL[match(TFresults$TF, hocoIDs$HOCOID)]
+TFresults$type = ifelse(TFresults$weighted_meanDifference < 0, "UP_kids", "UP_dads")
+
+# Filter out TFs not expressed in the fibroblasts:
+TFresults$exprFib = ifelse(TFresults$ensembl %in% res_fibOrdered_df$ensembl, TRUE, FALSE)
+table(TFresults$exprFib)
+table(TFresults[,c(8,12)])
+length(unique(TFresults$ensembl[TFresults$exprFib == TRUE]))
+# write.csv(TFresults, file = file.path(dir1, "bunina/LSD1/ATACseq/output", "LSD1_2019.summaryEnsemblIDs.csv"), quote = F, row.names = F)
+TFresults = read.csv(file.path(dir1, "bunina/LSD1/ATACseq/output", "LSD1_2019.summaryEnsemblIDs.csv"))
+
+#stats of padj and cohenD:
+TFresults$sig_padj = ifelse(TFresults$pvalueAdj < 0.05, TRUE, FALSE)
+table(TFresults[,c("Cohend_factor", "sig_padj")])
+
+TFresults_sig = TFresults[TFresults$Cohend_factor != 1 & TFresults$pvalueAdj < 0.05 & TFresults$exprFib == TRUE,]
+write.csv(TFresults_sig, file = file.path(dir1, "bunina/LSD1/ATACseq/output", "LSD1_2019.summaryEnsemblIDs_signif.csv"), quote = F, row.names = F)
+table(TFresults_sig$type)
+
+TFresults_sig$TFname = egs_hg19_all$external_gene_name[match(TFresults_sig$ensembl, egs_hg19_all$ensembl_gene_id)]
+TFresults$TFname = egs_hg19_all$external_gene_name[match(TFresults$ensembl, egs_hg19_all$ensembl_gene_id)]
+
+library(clusterProfiler)
+library(org.Hs.eg.db)
+goObj_BP <- clusterProfiler::compareCluster(ensembl ~ type, data = TFresults_sig,
+                                            fun = "enrichGO", universe = TFresults$ensembl,
+                                            keyType = "ENSEMBL",
+                                            OrgDb = org.Hs.eg.db,
+                                            ont = "BP", readable = TRUE, 
+                                            qvalueCutoff  = 0.1)
+dotplot(goObj_BP, showCategory= 10)
+goObj_BP_df = as.data.frame(goObj_BP@compareClusterResult)
+
+goObj_BP_df = goObj_BP_df %>%
+  dplyr::arrange(desc(Count)) #group_by(type) %>%
+
+organDevel = goObj_BP_df$geneID[goObj_BP_df$ID == "GO:0048568"]
+organDevel = unlist(sapply(strsplit(organDevel, "/"), "["))
+
+AP1complex = c("JUN", "JUNB", "JUND", "FOS", "FOSL1", "FOSL2") #Fosl1/2 are Fra1/2!
+
+TFresults_sig$GOterms = ifelse(TFresults_sig$TFname %in% AP1complex, "AP1complex",
+                               ifelse(TFresults_sig$TFname %in% organDevel, "organDev", "other"))
+table(TFresults_sig$GOterms)
+
+### revert X-axis to match other plots direction LSD1mut vs LSD1wt:
+TFresults_sig$LSD1mut_vs_WT = - TFresults_sig$weighted_meanDifference
+TFresults$LSD1mut_vs_WT = - TFresults$weighted_meanDifference
+
+TFresults$GOterms = ifelse(TFresults$TFname %in% AP1complex, "AP1complex",
+                           ifelse(TFresults$TFname %in% organDevel, "organDev", "other"))
+
+ageGenes_sig = readRDS(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output", "ageGenes_sig_pval.Rds"))
+ageGenes300m = readRDS(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output", "ageGenes300m.Rds"))
+
+TFresults$ageing = ifelse(TFresults$ensembl %in% c(ageGenes_sig$ensembl_gene_id, ageGenes300m$ensembl_gene_id), TRUE, FALSE)
+TFresults_sig$ageing = ifelse(TFresults_sig$ensembl %in% c(ageGenes_sig$ensembl_gene_id, ageGenes300m$ensembl_gene_id), TRUE, FALSE)
+table(TFresults_sig$ageing)
+table(TFresults_sig[,c("ageing","type")])
+
+pdf(file = file.path(dir1, "bunina/LSD1/ATACseq/output/plots", "diffTF2019_volcano_modJuly2021.pdf"), width = 7, height = 5, useDingbats = FALSE)
+### remove low p-value TFs that have Cohen's D of 1 or are not expressed in fib and are not ageing:
+TFresults %>%
+  subset( (pvalueAdj > 0.05 & exprFib == TRUE) | (pvalueAdj < 0.05 & Cohend_factor != 1 & exprFib == TRUE) & ageing == FALSE) %>%
+  ggplot() + theme_classic() + 
+  geom_point(aes(x = LSD1mut_vs_WT, y = -log10(pvalueAdj), color = GOterms), alpha = 0.5) + 
+  geom_text_repel(data = subset(TFresults_sig, GOterms %in% c("AP1complex", "organDev") & ageing == FALSE), aes(label = TF, x = LSD1mut_vs_WT, 
+                                                                                                                y = -log10(pvalueAdj), color = GOterms), 
+                  box.padding = 0.25, size = 2.5, segment.size = 0.1) +
+  scale_color_manual(values = c("#5e3c99", "#e66101", "#404040")) +
+  geom_hline(yintercept = -log10(0.05), color = "blue", linetype = 2) + 
+  geom_vline(xintercept = 0, linetype = 2)
+dev.off()
