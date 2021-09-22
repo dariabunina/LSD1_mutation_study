@@ -58,95 +58,6 @@ sum(ATACnloe.r$Fold < 0)
 ATACnloe.r_all = dba.report(ATACnloe.a, th=1, DataType = DBA_DATA_FRAME) #doesn't work with GR! method = DBA_EDGER_BLOCK, 
 ATACnloe.r_all_gr = makeGRangesFromDataFrame(ATACnloe.r_all[-62294,], keep.extra.columns = TRUE)
 
-### ChromHMM overlaps ====
-### compare differential peaks with all peaks in genomic features distribution:
-# features are taken from the roadmap HMM in foreskin fibroblasts cell line E055 https://egg2.wustl.edu/roadmap/data/byFileType/chromhmmSegmentations/ChmmModels/coreMarks/indivModels/default_init/E055/n15/E055_15_coreMarks_dense.bed
-# saved to ATACseq data folder:
-
-# nhlf_hmm_data = import.bed(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/data", "wgEncodeBroadHmmNhlfHMM.bed"))
-fib_hmm_data = rtracklayer::import.bed(file.path(dir1, "bunina/LSD1/ATACseq/data", "E055_15_coreMarks_dense.bed"))
-
-#state names:
-names_fib_hmm = read.table(file.path(dir1, "bunina/LSD1/ATACseq/data", "core15marks_HMM_names.txt"), sep = "\t")
-names_fib_hmm_r = data.frame(ids = names_fib_hmm$V1[-1], numb = NA, names = NA, stringsAsFactors = FALSE)
-names_fib_hmm_r$numb = sapply(strsplit(as.character(names_fib_hmm_r$ids), "_"), "[", 1)
-names_fib_hmm_r$names = sapply(strsplit(as.character(names_fib_hmm_r$ids), "_"), "[", 2)
-
-mcols(fib_hmm_data)$names_full = names_fib_hmm_r$names[match(mcols(fib_hmm_data)$name, names_fib_hmm_r$numb)]
-
-# overlap peak midths only! to avoid multiple mappings to different features:
-ATAC_all_n_mid = ATACnloe.r_all_gr
-midths_atac = round(start(ATACnloe.r_all_gr) + width(ATACnloe.r_all_gr) / 2)
-start(ATAC_all_n_mid) <- midths_atac
-end(ATAC_all_n_mid) <- midths_atac
-
-ol_atac_hmm = findOverlaps(ATAC_all_n_mid, fib_hmm_data)
-mcols(ol_atac_hmm)$state = mcols(fib_hmm_data)$names_full[subjectHits(ol_atac_hmm)]
-
-#now add the states to the original data granges - which has the same peak order as the midth GRanges:
-mcols(ATACnloe.r_all_gr)$HMM_state = NA
-mcols(ATACnloe.r_all_gr)$HMM_state[queryHits(ol_atac_hmm)] = mcols(ol_atac_hmm)$state[queryHits(ol_atac_hmm)]
-mcols(ATACnloe.r_all_gr)$sigPeak = ifelse(mcols(ATACnloe.r_all_gr)$FDR < 0.05 & mcols(ATACnloe.r_all_gr)$Fold > 0, "UP_Kids", 
-                                          ifelse(mcols(ATACnloe.r_all_gr)$FDR < 0.05 & mcols(ATACnloe.r_all_gr)$Fold < 0, "UP_Dads", "NonSignif"))
-
-ATAC_all_n_bl_df = as.data.frame(ATACnloe.r_all_gr)
-ATAC_hmm_stats = as.data.frame(table(ATAC_all_n_bl_df[,c(12:13)])) #16:17; 13:14
-
-table(mcols(ATACnloe.r_all_gr)$sigPeak)
-unique(mcols(ATACnloe.r_all_gr)$sigPeak)
-total_peaks_df = data.frame(type = unique(mcols(ATACnloe.r_all_gr)$sigPeak), total = c(7364, 9061, 80041), stringsAsFactors = FALSE) #c(7048, 1207, 88119)
-
-ATAC_hmm_stats$total = total_peaks_df$total[match(ATAC_hmm_stats$sigPeak, total_peaks_df$type)]
-
-ATAC_hmm_stats$percent = 100*ATAC_hmm_stats$Freq / ATAC_hmm_stats$total
-sum(ATAC_hmm_stats$percent[ATAC_hmm_stats$sigPeak == "NonSignif"]) #99.7%, good!
-ATAC_hmm_stats = ATAC_hmm_stats[order(ATAC_hmm_stats$percent, decreasing = TRUE),]
-ATAC_hmm_stats$HMM_state = factor(ATAC_hmm_stats$HMM_state, levels = unique(as.character(ATAC_hmm_stats$HMM_state)))
-
-library(scales)
-cbp1 <- c("#999999", scales::hue_pal()(2)[c(2,1)])
-
-# pdf(file = file.path(dir1, "bunina/LSD1/ATACseq/output/plots", "ATACpeaksDistr_HMM_15states.pdf"), width = 4, height = 2.5, useDingbats = FALSE)
-pdf(file = file.path(dir1, "bunina/LSD1/ATACseq/output/plots", "ATACpeaksDistr_HMM_15statesNew.pdf"), 
-    width = 4, height = 2.5, useDingbats = FALSE)
-ggplot(data = ATAC_hmm_stats, aes(x = HMM_state, y = percent)) + geom_bar(stat = "identity", aes(fill = sigPeak), position = "dodge", alpha = 0.9) +
-  scale_fill_manual(values = cbp1) + theme_classic(base_size = 8) + theme(axis.text.x = element_text(angle = 90, hjust = 1))
-dev.off()
-
-#Fisher tests on selected states:
-ATAC_hmm_stats$difference = ATAC_hmm_stats$total - ATAC_hmm_stats$Freq
-
-hmm_fisher = list()
-for (i in unique(ATAC_hmm_stats$HMM_state)) {
-  for (j in c("UP_Dads", "UP_Kids")) {
-    #order the rows properly to get correct oddsRatios directions:
-    hmm_fisher[[paste(i, j, sep = "_")]] <- fisher.test(rbind(ATAC_hmm_stats[ATAC_hmm_stats$HMM_state == i & 
-                                                                               ATAC_hmm_stats$sigPeak == j,c(3,6)], 
-                                                              ATAC_hmm_stats[ATAC_hmm_stats$HMM_state == i & 
-                                                                               ATAC_hmm_stats$sigPeak == "NonSignif",c(3,6)]))
-  }
-}
-hmm_fisher_df = data.frame(id = names(hmm_fisher), pval = unlist(lapply(hmm_fisher, '[', 1)), 
-                           oddR = unlist(lapply(hmm_fisher, '[', 3)), stringsAsFactors = FALSE)
-hmm_fisher_df$p.adj = p.adjust(hmm_fisher_df$pval, method = "BH")
-hmm_fisher_df$id = factor(hmm_fisher_df$id, levels = unique(hmm_fisher_df$id))
-
-col_hmm = rep("black", nrow(hmm_fisher_df))
-col_hmm[which(hmm_fisher_df$p.adj < 0.05)] = "red"
-
-col_hmm1 = rep("#999999", nrow(hmm_fisher_df))
-col_hmm1[which(hmm_fisher_df$p.adj < 0.05)] = "#E69F00"
-
-
-pdf(file = file.path(dir1, "bunina/LSD1/ATACseq/output/plots", "ATACpeaksDistr_HMM_15states_pvalsNew.pdf"), 
-    width = 4, height = 2.5, useDingbats = FALSE)
-ggplot(data = hmm_fisher_df, aes(x = id, y = log2(oddR))) + geom_bar(stat = "identity", fill = col_hmm1) + 
-  theme_classic() + theme(axis.text.x = element_text(angle = 90, hjust = 1))
-ggplot(data = hmm_fisher_df, aes(x = id, y = log2(oddR))) + geom_point(color = col_hmm) + 
-  theme_classic() + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + 
-  geom_hline(yintercept = 0, linetype = 2, size = 0.2, alpha = 0.8) + 
-  scale_y_continuous(position = "right")
-dev.off()
 
 
 # diffTF_results_visualisation ----------------------------------------------------------
@@ -228,3 +139,93 @@ TFresults %>%
   geom_hline(yintercept = -log10(0.05), color = "blue", linetype = 2) + 
   geom_vline(xintercept = 0, linetype = 2)
 dev.off()
+
+
+# Find nearest genes to peaks ---------------------------------------------
+
+mart_hg19 = useMart(host='grch37.ensembl.org', biomart = "ENSEMBL_MART_ENSEMBL", dataset = "hsapiens_gene_ensembl")
+ds_hg19 = useDataset('hsapiens_gene_ensembl', mart=mart_hg19)
+egs_hg19 = getBM(attributes = c('ensembl_gene_id', 'chromosome_name','start_position', 'external_gene_name', 'end_position','strand'), mart=ds_hg19)
+
+#take only prot coding and lncRNAs:
+egs_hg19_prot = getBM(attributes = c('ensembl_gene_id', 'chromosome_name','start_position', 'external_gene_name', 'end_position','strand', 'entrezgene_id'), 
+                      mart=mart_hg19, filters = "biotype", values = c("protein_coding", "lincRNA"))
+
+egs_hg19$TSS = ifelse( egs_hg19$strand == "1", egs_hg19$start_position, egs_hg19$end_position )
+egs_hg19$strand_m = ifelse(egs_hg19$strand == 1, "+", "-")
+egs_hg19_tss = GRanges(seqnames = Rle( paste0('chr', egs_hg19$chromosome_name) ),
+                       ranges = IRanges( start = egs_hg19$TSS,
+                                         end = egs_hg19$TSS),
+                       strand = Rle(egs_hg19$strand_m),
+                       gene = egs_hg19$external_gene_name, ensembl = egs_hg19$ensembl_gene_id)
+
+egs_hg19_tss = egs_hg19_tss[mcols(egs_hg19_tss)$ensembl %in% egs_hg19_prot$ensembl_gene_id]
+
+#Find nearby protein-coding gene:
+#(function taken from DiffBindSox2 script):
+findNextProm = function(peakGR = sox2_diffP_s_downNP, promGR = egs_tss) {
+  nearG = suppressWarnings(distanceToNearest(peakGR, promGR)) #GRanges function
+  # length(unique(queryHits(nearG))) #all unique ones, good
+  mcols(nearG)$ensembl = mcols(promGR)$ensembl[subjectHits(nearG)]
+  mcols(nearG)$geneName = mcols(promGR)$geneName[subjectHits(nearG)]
+  mcols(peakGR)$nearDist = NA
+  mcols(peakGR)$nearDist[queryHits(nearG)] <- mcols(nearG)$distance
+  mcols(peakGR)$nearGene = NA
+  mcols(peakGR)$nearGene[queryHits(nearG)] <- mcols(nearG)$ensembl
+  mcols(peakGR)$less50kb = ifelse(mcols(peakGR)$nearDist < 50000,"yes","no")
+  mcols(peakGR)$less3kb = ifelse(mcols(peakGR)$nearDist < 3000,"yes","no")
+  return(peakGR)
+}
+
+ATACnloe.r_all_gr
+ATACnloe.r_al_prom = findNextProm(peakGR = ATACnloe.r_all_gr, promGR = egs_hg19_tss)
+
+#add gene expression data:
+dds_fib10 = readRDS(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects",
+                              "dds_fib10countsMinDadsKidsMyRNAseq.Rds"))
+res_fib10 <- results(dds_fib10)
+res_fibSig = subset(res_fib10, padj < 0.1 )
+res_fibSig_df = as.data.frame(res_fibSig)
+res_fibSig_df$geneType = ifelse(res_fibSig_df$log2FoldChange > 0, "up_kids", "down_kids")
+res_fibSig_df$geneName = egs_hg19$external_gene_name[match(row.names(res_fibSig_df), egs_hg19$ensembl_gene_id)]
+ageGenes300m = readRDS(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output", "ageGenes300m.Rds"))
+#do GO enrichments after removing ageing genes:
+res_fibSig_df_noAge = subset(res_fibSig_df, !(row.names(res_fibSig_df) %in% ageGenes300m$ensembl_gene_id) )
+
+ATACnloe.r_al_prom$geneLFC = res_fib10$log2FoldChange[match(ATACnloe.r_al_prom$nearGene, row.names(res_fib10))]
+ATACnloe.r_al_prom$geneLFC_sig = ifelse(ATACnloe.r_al_prom$nearGene %in% row.names(res_fibSig_df_noAge), "sig", "other")
+ATACnloe.r_al_prom$sig_both = ifelse(ATACnloe.r_al_prom$FDR < 0.05 & ATACnloe.r_al_prom$geneLFC_sig == "sig", "sig", "other")
+
+# pdf(file = file.path(dir1, "bunina/LSD1/ATACseq/output/plots", "ATAC_RNAcorrScatter_new.pdf"), 
+#     width = 4, height = 3.5, useDingbats = FALSE)
+tiff(file = file.path(dir1, "bunina/LSD1/ATACseq/output/plots", "ATAC_RNAcorrScatter_new.tiff"), 
+     width = 4, height = 3.5, units = "in", res = 500, compression = "lzw")
+ggplot(data = as.data.frame(ATACnloe.r_al_prom), aes(x = Fold, y = geneLFC, color = sig_both)) + geom_point(size = 0.2, alpha = 0.5) + theme_classic() + 
+  scale_color_manual(values = c("grey", "red")) + geom_hline(yintercept = 0, linetype = 2) + geom_vline(xintercept = 0, linetype = 2) + 
+  xlab("ATACseq peak log2FC in LSD1mut vs. LSD1wt") + ylab("Peak-proximal RNA log2FC in LSD1mut vs. LSD1wt")
+dev.off()
+
+ATACnloe.r_al_prom_df = as.data.frame(ATACnloe.r_al_prom)
+ATACnloe.r_al_prom_df = ATACnloe.r_al_prom_df[complete.cases(ATACnloe.r_al_prom_df[,c("Fold", "geneLFC")]),]
+ATACnloe.r_al_prom_df$nearGene_name = egs_hg19$external_gene_name[match(ATACnloe.r_al_prom_df$nearGene, egs_hg19$ensembl_gene_id)]
+
+#same for <3kb distance:
+tiff(file = file.path(dir1, "bunina/LSD1/ATACseq/output/plots", "ATAC_RNAcorrScatter_new_less3kbTSS.tiff"), 
+     width = 4, height = 3.5, units = "in", res = 500, compression = "lzw")
+ggplot(data = subset(ATACnloe.r_al_prom_df, less3kb == "yes" ), aes(x = Fold, y = geneLFC, color = sig_both)) + geom_point(size = 0.2, alpha = 0.5) + theme_classic() + 
+  scale_color_manual(values = c("grey", "red")) + geom_hline(yintercept = 0, linetype = 2) + geom_vline(xintercept = 0, linetype = 2) + 
+  xlab("ATACseq peak log2FC in LSD1mut vs. LSD1wt") + ylab("Peak-proximal RNA log2FC in LSD1mut vs. LSD1wt") + 
+  geom_text_repel(data = subset(ATACnloe.r_al_prom_df, less3kb == "yes" & sig_both == "sig" & Fold > 2.5 & geneLFC > 1.5), aes(label = nearGene_name), 
+                  box.padding = 0.35, size = 3, segment.size = 0.2) + 
+  geom_text_repel(data = subset(ATACnloe.r_al_prom_df, less3kb == "yes" & sig_both == "sig" & Fold < -1 & geneLFC < -1), aes(label = nearGene_name), 
+                  box.padding = 0.35, size = 3, segment.size = 0.2)
+dev.off()
+
+
+cor(ATACnloe.r_al_prom_df$Fold, ATACnloe.r_al_prom_df$geneLFC)
+cor(ATACnloe.r_al_prom_df$Fold[ATACnloe.r_al_prom_df$sig_both == "sig"], ATACnloe.r_al_prom_df$geneLFC[ATACnloe.r_al_prom_df$sig_both == "sig"])
+
+ATACnloe.r_al_prom_df_3kb = subset(ATACnloe.r_al_prom_df, less3kb == "yes")
+cor(ATACnloe.r_al_prom_df_3kb$Fold, ATACnloe.r_al_prom_df_3kb$geneLFC)
+cor(ATACnloe.r_al_prom_df_3kb$Fold[ATACnloe.r_al_prom_df_3kb$sig_both == "sig"], ATACnloe.r_al_prom_df_3kb$geneLFC[ATACnloe.r_al_prom_df_3kb$sig_both == "sig"])
+table(ATACnloe.r_al_prom_df_3kb$sig_both)

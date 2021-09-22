@@ -1,0 +1,1153 @@
+---
+title: "LSD1 RNA-seq (both families; design = ~ family + condition)"
+output: html_notebook
+---
+
+This script imports read counts from the /Volumes/zaugg server, creates ```RangedSummarizedExperiment``` object, and performs DE analysis using the ```DESeq2``` package. Further transformations, visualisations and analyses are performed on the resulting ```DESeqDataSet``` object.
+
+This script is one of six analgous scripts, each corresponding to a specific combination of samples (i.e. Dad12, Pro41 etc.) and a specific experiment design (e.g. ```design ~ family + condition```).
+
+Scripts:
+  1. All, uncorrected for batch effect  
+  2. All, corrected for batch effect  
+  3. A  
+  4. B (incl. outlier KSF2)  
+  4x. B (excl. outlier KSF2)  
+  2x. All, corrected for batch effect (excl. outlier KSF2) 
+
+This is Script 2new.
+
+--------------------------------------------------------------------------------------------------------------
+------------------------------------------------ Preparation -------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+
+
+### Install packages from Bioconductor & server path (#### commented out ####)
+```{r}
+# library(BiocInstaller)
+# biocLite(c('GenomicFeatures', "R samtools", "GenomicAlignments", "DESeq2", "clusterProfiler", "org.Hs.eg.db", "apeglm"))
+# install.packages("beepr")
+
+{
+  library(GenomicFeatures)
+  library(Rsamtools)
+  library(GenomicAlignments)
+  library(DESeq2)
+  library(clusterProfiler)
+  library(org.Hs.eg.db)
+  library(ggplot2)
+  library(stringi)
+  library(stringr)
+  library(tidyverse)
+  library(openxlsx)
+  library(dplyr)
+  library(plyr)
+  library(biomaRt)
+  library(beepr)
+}
+
+# dir <- "/g/scb2/zaugg"
+SAVE_OBJECTS <- FALSE
+```
+
+
+### Get the file names
+```{r}
+countFiles <- list.files(file.path(dir, "bunina/LSD1/differentiation/Endoderm/data/bam/"),
+                        pattern = "bam$", full.names = TRUE) # the '$' after 'bam' ensures that only files ending in bam are included
+
+X <- basename(countFiles) # removes all of the path up to and including the last path separator (if any)
+X <- as.character(X)
+
+X_split <- strsplit(X,"[.]") # splits each entry of X into the substrings separated by "." in said entry
+
+countFileSplit <- sapply(X_split,"[[",1) # applies "[[" function over all entries of X_split
+```
+
+
+### Construct table describing samples
+```{r}
+cond <- c(rep("control", 10), rep("mutant",8))
+repl <- rep(c(1,2),9)
+family <- c(rep("A",6), rep("B",8), rep("A",4))
+individual <- stri_sub(countFileSplit, 1, -2)
+sampleTableLsd <- data.frame(row.names = countFileSplit, condition = cond, replicates = repl,
+                            family = family, id = countFileSplit, individual)
+```
+
+
+### Import data (#### commented out ####)
+```{r}
+gtffile <- file.path(dir, "zaugg_shared/annotations/hg19/Gencode_v19", "gencode.v19.annotation.gtf")
+
+txdb <- makeTxDbFromGFF(gtffile, format="gtf", circ_seqs=character())
+```
+The ```TxDb``` class is a container for storing transcript annotations.
+```makeTxDbFromGFF``` imports genomic features from the ```gtf``` file as a ```GRanges``` object; prepare the 'metadata' data frame; makes the ```TxDb``` object.
+
+
+
+### Create ```GRangesList``` object (#### commented out ####)
+```exonsBy``` extracts & groups genomic features of a given type from a ```TxDb```-like object and creates ```GRangesList``` object.
+```{r}
+ebg <- exonsBy(txdb, by="gene")
+```
+The ```GRanges``` class is a container for the genomic locations and their associated annotations. A ```GRangesList``` object is a container for storing a collection of ```GRanges``` objects.
+
+### Save objects for se creation
+```{r}
+ebg2 <- ebg
+countFiles2 <- countFiles
+
+saveRDS(ebg2, file = file.path(dir, "oheachte/LSD1/endo_RNAseq/Saved_objects/ebg2.rds"))
+saveRDS(countFiles2, file = file.path(dir, "oheachte/LSD1/endo_RNAseq/Saved_objects/countFiles2.rds"))
+```
+
+
+
+### Create counts matrix (```RangedSummarizedExperiment``` object) (#### commented out ####)
+```summarizeOverlaps(
+  features, reads, mode=Union,
+  ignore.strand=FALSE, inter.feature=TRUE, preprocess.reads=NULL, ...)```
+```features``` is a ```GRanges``` or ```GRangesList``` object containing genomic regions of interest
+```{r}
+dir <- "/g/scb2/zaugg"
+ebg2 <- readRDS(file = file.path(dir, "oheachte/LSD1/endo_RNAseq/Saved_objects/ebg2.rds"))
+countFiles2 <- readRDS(file = file.path(dir, "oheachte/LSD1/endo_RNAseq/Saved_objects/countFiles2.rds"))
+
+se <- summarizeOverlaps(features=ebg2,
+                        reads=countFiles2,
+                        mode="Union",
+                        singleEnd=TRUE,
+                        ignore.strand=TRUE)
+
+# colData(se) = DataFrame(sampleTableLsd) # Assign column data to the count matrix (i.e. samples description table from earlier)
+# 
+# se2 <- se
+# 
+# saveRDS(se2, file = file.path(dir, "oheachte/LSD1/endo_RNAseq/Saved_objects/se2.rds"))
+```
+
+
+### Retrieve pre-made ```se``` object
+```{r}
+se <- readRDS(file = file.path(dir1, "oheachte/LSD1/endo_RNAseq/Saved_objects/se.rds"))
+
+# colData(se) <- DataFrame(sampleTableLsd) # Should be saved like this but just in case
+```
+
+--------------------------------------------------------------------------------------------------------------
+-------------------------------------------------- Analysis --------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+
+### Create ```DESeqDataSet``` object
+```{r}
+# dds <- DESeqDataSet(se, design = ~ family + condition)
+```
+The ```DESeqDataSet``` object class is a subclass of ```RangedSummarizedExperiment```, used to store the input values, intermediate calculations and results of an analysis of differential expression.
+Takes a ```RangedSummarizedExperiment``` object as its first argument.
+The ```design``` argument specifies how the counts for each gene depend on the variables in ```colData```.
+
+
+### Extract counts matrix from ```DESeqDataSet``` object
+```{r}
+# dds_counts <- counts(dds)
+```
+
+
+### Discard genes with near-zero read counts
+```{r}
+# dds <- dds[rowSums(dds_counts) >= 30]
+# dds_counts = counts(dds)
+```
+
+
+### Perform DE analysis on counts, given design (see above)
+```{r}
+dds_endo <- DESeqDataSet(se, design = ~family+condition)
+# 
+dds_counts = counts(dds_endo)
+# 
+dds_endo <- dds_endo[rowSums(dds_counts) >= 30]     # Filter out low count genes
+# dds_counts = counts(dds)
+# 
+dds_endo <- DESeq(dds_endo)
+# rownames(dds) <- sapply(strsplit(rownames(dds), '[.]'), '[[', 1)
+# 
+saveRDS(dds_endo, file = file.path(dir1, "bunina/LSD1/differentiation/dds_endo_new.rds"))
+
+# rownames(dds) <- sapply(strsplit(rownames(dds), '[.]'), '[[', 1)
+# 
+# dds2new <- dds
+# 
+# saveRDS(dds2new, file = file.path(dir, "oheachte/LSD1/data/R_objects/DE_new_analyses/2new/dds2new.rds"))
+```
+
+
+### Retrieve pre-made ```dds``` object (#### commented out ####)
+```{r}
+# dds <- readRDS(file = file.path(dir1, "oheachte/LSD1/endo_RNAseq/Saved_objects/dds.rds"))
+dds <- readRDS(file = file.path(dir1, "bunina/LSD1/differentiation/dds_endo_new.rds"))
+
+```
+
+
+### Extract a ```DESeqResults``` (subclass of ```DataFrame```) table from a DESeq analysis
+```{r}
+dds_res <- results(dds, pAdjustMethod = "BH")
+
+resultsNames(dds)
+
+head(dds_res)
+```
+Gives base means across samples, log2 fold changes, standard errors, test statistics, p-values and adjusted p-values.  
+```resultsNames``` returns the names of the estimated coefficents of the model.
+
+--------------------------------------------------------------------------------------------------------------
+----------------------------------------------- Visualisation ------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+
+### Summarize DESeq results
+```{r}
+summary(dds_res)
+```
+
+### MA-plot
+```{r}
+DESeq2::plotMA(dds_res, ylim=c(-5,5))
+```
+
+```{r MA plots all lineages + iPSCs}
+
+
+dds_neur <- readRDS(file = file.path(dir1, "bunina/LSD1/differentiation/dds_neur_new.rds"))
+dds_card <- readRDS(file = file.path(dir1, "bunina/LSD1/differentiation/dds_card_new.rds"))
+
+res_ipsc_mod = results(dds_ipsc_mod)
+res_endo = results(dds)
+res_neur = results(dds_neur)
+res_card = results(dds_card)
+
+pdf(file = file.path(dir1, "bunina/LSD1/differentiation", "MAplotsAll_Fig3new.pdf"), 
+    useDingbats = FALSE, width = 4, height = 3)
+plotMA(res_ipsc_mod, colSig = "red", colNonSig = "#4d4d4d", cex = 0.2, ylim = c(-4,4))
+plotMA(res_endo, colSig = "red", colNonSig = "#4d4d4d", cex = 0.2, ylim = c(-4,4))
+plotMA(res_neur, colSig = "red", colNonSig = "#4d4d4d", cex = 0.2, ylim = c(-4,4))
+plotMA(res_card, colSig = "red", colNonSig = "#4d4d4d", cex = 0.2, ylim = c(-4,4))
+dev.off()
+
+###
+### Below - old, didn't work!
+ma_df_list = list()
+
+ma_df_list[["endo"]] = DESeq2::plotMA(dds_res, ylim=c(-5,5), returnData = TRUE)
+
+# dds <- readRDS(file = file.path(dir1, "oheachte/LSD1/card_RNAseq/Saved_objects/dds.rds"))
+dds <- readRDS(file = file.path(dir1, "oheachte/LSD1/neur_RNAseq/Saved_objects/dds.rds"))
+dds_res <- results(dds, pAdjustMethod = "BH")
+
+ma_df_list[["card"]] = DESeq2::plotMA(dds_res, ylim=c(-5,5), returnData = TRUE)
+ma_df_list[["neur"]] = DESeq2::plotMA(dds_res, ylim=c(-5,5), returnData = TRUE)
+
+dds_ipsc_mod = readRDS(file.path(dir1, "bunina/LSD1/RNAseq/iPSCs/output/Robjects",
+                                   "dds_iPSCsDadsKidsRNAseq_noPro3.Rds"))
+res_ipsc_mod = results(dds_ipsc_mod)
+ma_df_list[["ipsc"]] = DESeq2::plotMA(dds_res, ylim=c(-5,5), returnData = TRUE)
+
+for (i in 1:4) {
+  ma_df_list[[i]]$type = names(ma_df_list)[[i]]
+}
+
+dfs_all = do.call("rbind", ma_df_list)
+
+ggplot(data = dfs_all, aes(x = mean, y = lfc, color = isDE)) + 
+  geom_point() + facet_wrap(~type, ncol = 4)
+```
+
+
+### p-value distribution
+```{r}
+hist(dds_res$pvalue[dds_res$baseMean > 1], main = "p-value distribution", xlab="", col="black", border="white")
+```
+
+### Download the gene nomenclature table
+```{r}
+mart_hg19 <- useMart(host='grch37.ensembl.org',
+                     biomart = "ENSEMBL_MART_ENSEMBL",
+                     dataset = "hsapiens_gene_ensembl")
+ds_hg19 <- useDataset('hsapiens_gene_ensembl',
+                      mart=mart_hg19)
+egs_hg19 <- getBM(attributes = c('ensembl_gene_id',
+                                 'chromosome_name',
+                                 'external_gene_name'),
+                  mart=ds_hg19)
+```
+
+### Top up & down genes
+```{r}
+res_sig      <- dds_res[which(dds_res$padj < 0.1),
+                        ]
+res_sig_up   <- res_sig[which(res_sig$log2FoldChange > 0),
+                        ]
+res_sig_down <- res_sig[which(res_sig$log2FoldChange < 0),
+                        ]
+
+res_sig_ord      <- res_sig[order(res_sig$log2FoldChange,
+                             decreasing = TRUE),]
+res_sig_up_ord   <- res_sig_up[order(res_sig_up$log2FoldChange,
+                                   decreasing = TRUE),]
+res_sig_down_ord <- res_sig_down[order(res_sig_down$log2FoldChange,
+                                       decreasing = FALSE),]
+
+top_names      <- rownames(res_sig_ord)
+top_names_up   <- rownames(res_sig_up_ord)
+top_names_down <- rownames(res_sig_down_ord)
+
+length(top_names) == length(top_names_up) + length(top_names_down)   # Check
+
+# matches <- match(top_names, egs_hg19$ensembl_gene_id) # Locate indices of genes in table
+# top_names <- egs_hg19$external_gene_name[matches] # Gene names
+# matches <- match(top_names_up, egs_hg19$ensembl_gene_id) # Repeat
+# top_names_up <- egs_hg19$external_gene_name[matches] # Gene names
+# matches <- match(top_names_down, egs_hg19$ensembl_gene_id) # Repeat
+# top_names_down <- egs_hg19$external_gene_name[matches] # Gene names
+
+
+# top_LFC_up <- head(res_up_ord$log2FoldChange, n) # Corresponding LFCs
+# top_padj_up <- head(res_up_ord$padj, n) # Corresponding adjusted p-values
+# 
+# barplot(top_LFC_up, horiz = FALSE,
+#         names.arg = head(top_names_up, n), cex.names = 0.5,
+#         main = 'LFC of most up-expressed genes', las = 2, border = "white", col = 'brown3')
+```
+
+
+
+
+### Variance stabilisation transformation
+```{r}
+vst_dds <- varianceStabilizingTransformation(dds, blind=FALSE)
+head(assay(vst_dds), 5)
+```
+
+### PCA
+```{r}
+dataPCA <- plotPCA(vst_dds, intgroup=c("condition", "family"), returnData=TRUE)
+percentVar <- round(100 * attr(dataPCA, "percentVar"))
+
+p = ggplot() +
+  geom_point(data = dataPCA,
+             mapping = aes(PC1, PC2, color=family, shape=condition),
+             size=3) + 
+  scale_shape_manual(values = 1:9) + 
+  ggtitle("All together (corrected for batch effect)") + 
+  theme(aspect.ratio=0.8, plot.title = element_text(hjust = 0.5, face = "bold")) + 
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) + 
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed() + theme_bw()
+pdf(file = file.path(dir1, "bunina/LSD1/differentiation", "PCA_endo.pdf"), width = 6, height = 5, useDingbats = FALSE)
+p
+dev.off()
+```
+
+
+### GO enrichment analysis (BP)
+```{r}
+
+goObj_BP <- readRDS(file = file.path(dir1,
+                                     "oheachte/LSD1/endo_RNAseq/Saved_objects/goObj_BP.rds"))
+pdf(file = file.path(dir1, "bunina/LSD1/differentiation", "GO_BP_endo.pdf"), useDingbats = FALSE, width = 5, height = 3)
+dotplot(goObj_BP,
+        color = "p.adjust",
+        showCategory = 10,
+        by = "geneRatio",
+        title = "GO (BP) Enrichment",
+        font.size = 10)
+dev.off()
+
+goObj_BP_df = as.data.frame(goObj_BP@compareClusterResult)
+
+#compare with fibroblast UP genes:
+library(VennDiagram)
+library(eulerr)
+msig_endo_chromosomeSeg = unlist(strsplit(goObj_BP_df$geneID[goObj_BP_df$Description == "chromosome segregation"], "/"))
+
+DEGs_venn_fibro_endo = venn.diagram(list(endo_Down = as.character(diff_genes_3layers$gene[diff_genes_3layers$significant.endo == TRUE & diff_genes_3layers$log2FoldChange.endo < 0]), 
+                                    fibro_up = row.names(res_fibSig_df[res_fibSig_df$geneType == "up_kids",]), 
+                                    ChromosomeSegreg = msig_endo_chromosomeSeg ), filename = NULL, euler.d = TRUE)
+grid.draw(DEGs_venn_fibro_endo)
+
+plot(euler(list(endo_Down = as.character(diff_genes_3layers$gene[diff_genes_3layers$significant.endo == TRUE & diff_genes_3layers$log2FoldChange.endo < 0]), 
+                                    fibro_up = row.names(res_fibSig_df[res_fibSig_df$geneType == "up_kids",]), 
+                                    ChromosomeSegreg = msig_endo_chromosomeSeg ) ), quantities = TRUE)
+
+### plot counts ====
+
+dds <- readRDS(file = file.path(dir1, "oheachte/LSD1/neur_RNAseq/Saved_objects/dds.rds"))
+geneToPlot = "ENSG00000076382" # ChromSegreg gene
+geneToPlot = "ENSG00000004487" #LSD1 
+d <- plotCounts(dds, gene=rownames(dds)[pmatch(geneToPlot, rownames(dds))], intgroup=c("individual", "condition"), returnData=TRUE)
+
+ggplot(d, aes(x=condition, y=count, color = individual)) + 
+  geom_point(position=position_jitter(w=0.1,h=0)) +
+  theme_classic() + ggtitle(egs_hg19_all$external_gene_name[egs_hg19_all$ensembl_gene_id == geneToPlot]) #scale_y_log10() + 
+
+plotManyCounts = function(genesTable, withNames = TRUE, ddsObject = dds_ipsc, modRowNames = TRUE, col1 = "condition", col2 = "individual", logScale = FALSE) {
+  if (modRowNames == TRUE) {
+  row.names(ddsObject) = sapply(strsplit(rownames(ddsObject), "[.]"), "[", 1)
+  }
+  genesList = rownames(ddsObject)[rownames(ddsObject) %in% genesTable$ensembl_gene_id]
+  d = list()
+  for (i in 1:length(genesList)) { 
+    d[[genesList[[i]]]] <- plotCounts(ddsObject, gene=rownames(ddsObject)[pmatch(genesList[i], rownames(ddsObject))], 
+                         intgroup=c(col1), returnData=TRUE) 
+    }
+  d_m = do.call(what = cbind, args = d)
+  cols = seq(1,length(genesList)*2,2)
+d_m = d_m[,c(cols, length(genesList)*2)]
+colnames(d_m)[1:length(genesList)] <- sapply(strsplit(colnames(d_m)[1:length(genesList)], "[.]"), "[", 1)
+colnames(d_m)[length(colnames(d_m))] = col1
+if (withNames == TRUE) {
+  for (i in 1:length(colnames(d_m)[1:length(genesList)])) {
+    colnames(d_m)[i] = as.character(genesTable[genesTable$ensembl_gene_id %in% colnames(d_m)[i] ,]$external_gene_name)
+  }
+}
+d_m[,col2] <- colData(ddsObject)[,col2]
+d_long = gather(d_m, gene, normExpr, - col1, - col2, factor_key = TRUE)
+if (logScale == TRUE) {
+  ggplot(d_long, aes(x=d_long[,col1], y=log2(normExpr), colour = d_long[,col2])) + ggtitle("Expression of genes") + 
+  geom_point(position=position_jitter(w=0.1,h=0)) + facet_wrap(~gene, scales = "free")
+}
+else {
+  ggplot(d_long, aes(x= d_long[,col1], y=normExpr, colour = d_long[,col2])) + ggtitle("Expression of genes") + 
+  geom_point(position=position_jitter(w=0.1,h=0)) + facet_wrap(~gene, scales = "free")
+}
+}
+
+ChromSegreg_all = egs_hg19_all[egs_hg19_all$ensembl_gene_id %in% msig_endo_chromosomeSeg,]
+plotManyCounts(ChromSegreg_all[1:20,], ddsObject = dds, col2 = "family")
+
+## same for neuro object:
+goObj_BP <- readRDS(file = file.path(dir1,
+                                     "oheachte/LSD1/neur_RNAseq/Saved_objects/goObj_BP.rds"))
+pdf(file = file.path(dir1, "bunina/LSD1/differentiation", "GO_BP_neur.pdf"), useDingbats = FALSE, width = 7, height = 4)
+dotplot(goObj_BP,
+        color = "p.adjust",
+        showCategory = 10,
+        by = "geneRatio",
+        title = "GO (BP) Enrichment",
+        font.size = 10)
+dev.off()
+
+```
+
+
+# Compare endo & neuro DEGs
+```{r}
+diff_genes_3layers = readRDS(file.path(dir1, "oheachte/LSD1/Tissue_comparison/MergedDiffGenesData", "MergedDiffGenesData.rds"))
+
+diff_genes_3layers$sig_endo_neur = ifelse(diff_genes_3layers$significant.endo == TRUE & 
+                                            diff_genes_3layers$significant.neur == TRUE, TRUE, FALSE)
+diff_genes_3layers$UP_endo_neur = ifelse(diff_genes_3layers$sig_endo_neur == TRUE & 
+                                           diff_genes_3layers$log2FoldChange.endo > 0 & 
+                                           diff_genes_3layers$log2FoldChange.neur > 0, TRUE, FALSE)
+diff_genes_3layers$DOWN_endo_neur = ifelse(diff_genes_3layers$sig_endo_neur == TRUE & 
+                                           diff_genes_3layers$log2FoldChange.endo < 0 & 
+                                           diff_genes_3layers$log2FoldChange.neur < 0, TRUE, FALSE)
+
+library(msigdbr)
+library(clusterProfiler)
+#select set C2 - curated gene set, for the other options see this vignette: https://yulab-smu.github.io/clusterProfiler-book/chapter3.html#msigdb-analysis
+m_t2g <- msigdbr(species = "Homo sapiens", category = "C2") %>% 
+  dplyr::select(gs_name, gene_symbol)
+head(m_t2g)
+
+#modify the table to keep only Reactome/Kegg pathways:
+m_t2g$source = sapply(strsplit(m_t2g$gs_name, "_"), "[", 1)
+m_t2g_mod = subset(m_t2g, source %in% c("REACTOME", "KEGG"))
+m_t2g_mod$gs_name <- sub("REACTOME_", "", m_t2g_mod$gs_name)
+m_t2g_mod$gs_name <- sub("KEGG_", "", m_t2g_mod$gs_name)
+endo_neur_list = list(UP = as.character(diff_genes_3layers$name[diff_genes_3layers$UP_endo_neur == TRUE]), 
+                      DOWN = as.character(diff_genes_3layers$name[diff_genes_3layers$DOWN_endo_neur == TRUE]) )
+
+msig_endoNeur = compareCluster(endo_neur_list, fun = "enricher", TERM2GENE = m_t2g_mod, 
+                                universe = diff_genes_3layers$name, qvalueCutoff  = 0.1)
+
+pdf(file = file.path(dir1, "bunina/LSD1/differentiation", "SigDEG_CommonEndoNeur.pdf"), useDingbats = FALSE, width = 6, height = 4)
+dotplot(msig_endoNeur, showCategory = 10, font.size = 8)
+dev.off()
+
+msig_endoNeur_df = as.data.frame(msig_endoNeur@compareClusterResult)
+msig_endoNeur_DNArep = unlist(strsplit(msig_endoNeur_df$geneID[msig_endoNeur_df$ID == "DNA_REPLICATION"], "/"))
+
+library(VennDiagram)
+DEGs_venn = venn.diagram(list(endo = as.character(diff_genes_3layers$gene[diff_genes_3layers$significant.endo == TRUE]), 
+                                neuro = as.character(diff_genes_3layers$gene[diff_genes_3layers$significant.neur == TRUE]), 
+                                cardio = as.character(diff_genes_3layers$gene[diff_genes_3layers$significant.card == TRUE]) ), filename = NULL)
+plot.new()
+
+pdf(file = file.path(dir1, "bunina/LSD1/differentiation", "VennEndoNeurCard.pdf"), useDingbats = FALSE, width = 4, height = 4)
+grid.draw(DEGs_venn)
+dev.off()
+
+DEGs_venn_fibro = venn.diagram(list(endo_neur_Down = as.character(diff_genes_3layers$gene[diff_genes_3layers$DOWN_endo_neur == TRUE]), 
+                                    endo_neur_Up = as.character(diff_genes_3layers$gene[diff_genes_3layers$UP_endo_neur == TRUE]), 
+                                    fibro_up = row.names(res_fibSig_df[res_fibSig_df$geneType == "up_kids",]), 
+                                    fibro_down = row.names(res_fibSig_df[res_fibSig_df$geneType == "down_kids",]), 
+                                    DNArepGO = diff_genes_3layers$gene[diff_genes_3layers$name %in% msig_endoNeur_DNArep] ), filename = NULL)
+#less groups:
+DEGs_venn_fibro = venn.diagram(list(endo_neur_Down = as.character(diff_genes_3layers$gene[diff_genes_3layers$DOWN_endo_neur == TRUE]), 
+                                    fibro_up = row.names(res_fibSig_df[res_fibSig_df$geneType == "up_kids",]), 
+                                    DNArepGO = diff_genes_3layers$gene[diff_genes_3layers$name %in% msig_endoNeur_DNArep] ), filename = NULL)
+grid.draw(DEGs_venn_fibro)
+```
+
+
+
+# Lineage marker plots SuppFig2
+```{r}
+
+markerCounts = read.csv(file = file.path(dir1, "oheachte/LSD1/Tissue_comparison/lineageMarkers/lineageMarkers_done.csv"))
+x <- markerCounts[,c(1:2, 5:6, 8:9, 11:12, 14:15, 17:ncol(markerCounts))]
+
+for (tissue in c("iPSC", "endo", "card", "neur")){
+  bm <- x[, paste0("bm_", tissue)]
+  padj <- x[, paste0("padj_", tissue)]
+  sig_str <- paste0("sig_", tissue)
+  
+  sig <- ifelse(bm == 0 | padj >= 0.1 | is.na(padj), FALSE, TRUE) %>% as.vector
+  assign(sig_str, sig)
+}
+x <- cbind(x[, 1:3], sig_iPSC, sig_endo, sig_card, sig_neur, x[, 12:ncol(x)]) %>% as.tibble  # markers (rows) with significance (T/F) in each tissue & counts in each sample in each tissue
+
+plotData <- gather(x, -c(Lineage, Name, Maturity, sig_iPSC, sig_endo, sig_card, sig_neur), key = repID, value = count) %>%
+  arrange(., Lineage, Name)
+
+Tissue <- str_sub(plotData$repID, -4,-1)
+control_mutant <- ifelse(str_detect(plotData$repID, "Dad") | str_detect(plotData$repID, "KSF"), "WT", "LSD1mut")
+rep <- str_sub(plotData$repID, 1,4)
+rep[rep == "KSP1"] <- "KSP10"
+plotData <- cbind(plotData[,1:8], Tissue, control_mutant, rep, data.frame(count = plotData$count)) %>% as.tibble
+
+# Replace 4 sig columns (1 for each tissue) with one column showing, for each row,
+# the same value as the sig value (T/F) for the corresponding tissue.
+sig <- rep(FALSE, nrow(plotData))
+for (i in 1:nrow(plotData)){
+  tissue <- plotData$Tissue[i] %>% as.character
+  sig[i] <- plotData[i, paste0("sig_", tissue)] %>% as.logical
+}
+
+plotData <- cbind(plotData[,1:3], plotData[,8:9], sig, plotData[,10:12]) %>% as.tibble
+
+###
+### Plot selected markers from pdf:
+###
+plotData_sel = subset(plotData, Name %in% c("LIN28A", "GATA6", "HNF4A", "FOXA1", "FOXA2", "Isl1", "MESP1", "TBX5", "NEUROD1", "MAP2", "GRIA1"))
+
+pdf(file = file.path(dir1, "bunina/LSD1/differentiation", "MarkersAllTissues.pdf"), useDingbats = FALSE, width = 8, height = 5)
+ggplot(data = plotData_sel, aes(x = Tissue, y = count)) + geom_boxplot(aes(fill = control_mutant)) + 
+  facet_wrap(~Name, scales = "free_y") + theme_classic() + theme(axis.text.x = element_text(angle=45, hjust=1))
+dev.off()
+```
+
+# Are repressor TFs upregulated in lineages?
+```{r}
+diff_genes_3layers = readRDS(file.path(dir1, "oheachte/LSD1/Tissue_comparison/MergedDiffGenesData", "MergedDiffGenesData.rds"))
+
+length(diff_genes_3layers$gene[diff_genes_3layers$log2FoldChange.endo < 0 & diff_genes_3layers$significant.endo == TRUE])
+diff_genes_3layers$sig_any = ifelse(diff_genes_3layers$significant.card == TRUE | diff_genes_3layers$significant.endo == TRUE | 
+                                      diff_genes_3layers$significant.neur == TRUE, TRUE, FALSE)
+
+# Get the list of repressor TFs from biomart GO filter: (https://www.bioconductor.org/packages/devel/bioc/vignettes/biomaRt/inst/doc/accessing_ensembl.html#retrieve-all-entrezgene-identifiers-and-hugo-gene-symbols-of-genes-which-have-a-map-kinase-activity-go-term-associated-with-it.)
+egs_TFs = getBM(attributes = c('ensembl_gene_id', 'external_gene_name'), 
+                 mart=mart_hg19, filters = "go", values = "GO:0003700"  ) #"GO:0001217"
+egs_TFrepr = getBM(attributes = c('ensembl_gene_id', 'external_gene_name'), 
+                 mart=mart_hg19, filters = "go", values = "GO:0045892"  )
+egs_TFs$isRepressor = ifelse(egs_TFs$ensembl_gene_id %in% egs_TFrepr$ensembl_gene_id, TRUE, FALSE)
+table(egs_TFs$isRepressor)
+
+diff_genes_3layers$knownRepressorTF = ifelse(diff_genes_3layers$gene %in% egs_TFs$ensembl_gene_id[egs_TFs$isRepressor == TRUE], TRUE, FALSE)
+
+DE_repressors = diff_genes_3layers %>%
+  subset(sig_any == TRUE & knownRepressorTF == TRUE) %>%
+  subset(log2FoldChange.card > 1 | log2FoldChange.endo > 1 | log2FoldChange.neur > 1)
+DE_repressors = as.data.frame(DE_repressors)
+row.names(DE_repressors) <- DE_repressors$name
+
+
+pheatmap(DE_repressors[,c("log2FoldChange.endo", "log2FoldChange.card", "log2FoldChange.neur")], cluster_cols = FALSE, cluster_rows = TRUE, cellwidth = 20, 
+         color = colorRampPalette(rev(brewer.pal(n = 5, name = "PuOr")))(30), na_col = "grey",
+         annotation_colors = ann_colors, border_color = NA,
+         fontsize = 2)
+dev.off() #breaks = breaks_targets, gaps_row = gapRowsA, 
+
+diff_genes_3layers$GRNclassif = classif_list_GRN$classification_q0.1_final[match(diff_genes_3layers$gene, classif_list_GRN$ENSEMBL)]
+table(diff_genes_3layers[,c("sig_any", "GRNclassif")])
+
+DE_repressorsGRN = diff_genes_3layers %>%
+  subset(sig_any == TRUE & GRNclassif == "repressor") %>%
+  subset(log2FoldChange.card > 1 | log2FoldChange.endo > 1 | log2FoldChange.neur > 1)
+DE_repressorsGRN = as.data.frame(DE_repressorsGRN)
+row.names(DE_repressorsGRN) <- DE_repressorsGRN$name
+
+breaks_targets = c(seq(-1.5,-0.58, length.out = 12), 
+                seq(-0.579,0.579, length.out = 6), seq(0.58,3.5, length.out = 12))
+# ann_colors_n = list(significant.endo = c("red", "grey"), 
+#                   significant.card = c("red", "grey"), significant.neur = c("red", "grey"))
+
+pdf(file = file.path(dir1, "bunina/LSD1/differentiation", "GRNrepressorsLFCinTissues.pdf"), useDingbats = FALSE, width = 3, height = 3)
+pheatmap(DE_repressorsGRN[,c("log2FoldChange.endo", "log2FoldChange.card", "log2FoldChange.neur")], cluster_cols = FALSE, cluster_rows = TRUE, cellwidth = 20, color = colorRampPalette(rev(brewer.pal(n = 5, name = "PuOr")))(30), na_col = "grey",
+          border_color = NA, breaks = breaks_targets, annotation_row = DE_repressorsGRN[,c("significant.endo", "significant.card", "significant.neur")], fontsize = 6)
+dev.off() #, annotation_colors = ann_colors_n
+
+```
+
+
+# VPA treatment
+
+### import bams and count genes
+```{r}
+files = list.files(file.path(dir1, "bunina/LSD1/VPAtreatment/data/bams"), 
+                   pattern = ".bam$", full.names = TRUE)
+filesSplit = sapply(strsplit(as.character(basename(files)),"[.]"),"[[", 1)
+sampleTab = data.frame(row.names = filesSplit, type = c(rep("wt", 10), rep("mut", 8)), condition = rep(c("ctrl", "VPA"), 9), replicate = c(rep(1:5, each = 2), rep(1:4, each = 2)), line = substr(filesSplit, 1, 4))
+sampleTab$compare = paste(sampleTab$type, sampleTab$condition, sep = ".")
+
+bamfiles <- BamFileList(files)
+seqinfo(bamfiles[1])
+hg19gtf = file.path("/g/scb2/zaugg/zaugg_shared/annotations/hg19/Gencode_v19",
+                    "gencode.v19.annotation.gtf")
+hg19 = makeTxDbFromGFF(hg19gtf, format="gtf", circ_seqs=character())
+(ebg_hg19 <- exonsBy(hg19, by="gene"))
+seVPA <- summarizeOverlaps(features=ebg_hg19, reads=bamfiles,
+                           mode="Union",
+                           singleEnd=TRUE,
+                           ignore.strand=TRUE)
+colData(seVPA)
+(colData(seVPA) <- DataFrame(sampleTab))
+saveRDS(seVPA, file = file.path(dir1, "bunina/LSD1/VPAtreatment/output", "seVPA.rds"))
+seVPA = readRDS(file.path(dir1, "bunina/LSD1/VPAtreatment/output", "seVPA.rds"))
+
+```
+
+### do diff expr & get log2FC
+```{r DE on combined variable mut/wt and VPA/ctrl}
+library(magrittr)
+seVPA$type %<>% relevel("wt")
+seVPA$condition %<>% relevel("ctrl")
+dds_all = DESeqDataSet(seVPA, design = ~type + condition + type:condition)
+dds_all <- dds_all[ rowSums(counts(dds_all)) > 18, ]
+dds_all = DESeq(dds_all)
+resultsNames(dds_all)
+
+#extract raw counts for diffTF run:
+counts_rna_raw = counts(dds_all, normalized = FALSE)
+# row.names(counts_rna_raw) <- sapply(strsplit(row.names(counts_rna_raw), "[.]"), "[", 1)
+counts_rna_raw = as.data.frame(counts_rna_raw)
+counts_rna_raw$ENSEMBL = sapply(strsplit(row.names(counts_rna_raw), "[.]"), "[", 1)
+write.table(counts_rna_raw[,colnames(counts_rna_raw) %in% c("ENSEMBL", as.character(samples_good$SampleID))], file = file.path(dir1, "bunina/LSD1/VPAtreatment/output", "rawCountsGoodSamples.tsv"), sep = "\t", quote = F, row.names = F)
+#have to do separately for ctrl and VPA:
+write.table(counts_rna_raw[,colnames(counts_rna_raw) %in% c("ENSEMBL", "Dad3ctrl", "KSF2ctrl", "KSP10ctrl", "Pro4ctrl")], file = file.path(dir1, "bunina/LSD1/VPAtreatment/output", "rawCountsGoodSamples_1.tsv"), sep = "\t", quote = F, row.names = F)
+write.table(counts_rna_raw[,colnames(counts_rna_raw) %in% c("ENSEMBL", "Dad3VPA", "KSF2VPA", "KSP10VPA", "Pro4VPA")], file = file.path(dir1, "bunina/LSD1/VPAtreatment/output", "rawCountsGoodSamples_2.tsv"), sep = "\t", quote = F, row.names = F)
+
+res_all = results(dds_all)
+res_all_df = as.data.frame(res_all)
+
+###
+#using combined variable with mut/wt and VPA/ctrl:
+###
+
+seVPA$compare = paste(seVPA$type, seVPA$condition, sep = ".")
+colData(seVPA)
+dds_all_mod = DESeqDataSet(seVPA, design = ~compare)
+dds_all_mod <- dds_all_mod[ rowSums(counts(dds_all_mod)) > 18, ]
+dds_all_mod = DESeq(dds_all_mod)
+resultsNames(dds_all_mod)
+saveRDS(dds_all_mod, file = file.path(dir1, "bunina/LSD1/VPAtreatment/output", "dds_VPA_allPairs.rds"))
+dds_all_mod = readRDS(file.path(dir1, "bunina/LSD1/VPAtreatment/output", "dds_VPA_allPairs.rds"))
+
+## plot lncRNA:
+row.names(dds_all_mod) = sapply(strsplit(row.names(dds_all_mod), "[.]"), "[", 1)
+which(row.names(dds_all_mod) == "ENSG00000234449")
+plotCounts(dds = dds_all_mod, gene = which(row.names(dds_all_mod) == "ENSG00000234449"), intgroup = "compare")
+plotCounts(dds = dds_all_mod, gene = which(row.names(dds_all_mod) == "ENSG00000205662"), intgroup = "compare")
+plotCounts(dds = dds_all_mod, gene = which(row.names(dds_all_mod) == "ENSG00000205663"), intgroup = "compare", pch = 16, cex = 1.5)
+
+(colData(dds_all_mod) <- DataFrame(sampleTab))
+dds_all_mod$compare = factor(dds_all_mod$compare)
+
+#save as object mutVPA vs wtVPA and use these logFC values to plot the TF targets density!
+res_VPAmut_wt = results(dds_all_mod, contrast = c("compare", "mut.VPA", "wt.VPA"))
+saveRDS(res_VPAmut_wt, file = file.path(dir1, "bunina/LSD1/VPAtreatment/output", "res_VPAmut_wt.rds"))
+summary(res_VPAmut_wt)
+
+#same for wt:
+res_CTRLmut_wt = results(dds_all_mod, contrast = c("compare", "mut.ctrl", "wt.ctrl"))
+saveRDS(res_CTRLmut_wt, file = file.path(dir1, "bunina/LSD1/VPAtreatment/output", "res_CTRLmut_wt.rds"))
+summary(res_CTRLmut_wt)
+resSigEndoCtrl <- subset(res_CTRLmut_wt, padj < 0.1)
+
+res_CTRLmut_wt$ensembl = sapply(strsplit(row.names(res_CTRLmut_wt), "[.]"), "[", 1)
+res_VPAmut_wt$ensembl = sapply(strsplit(row.names(res_VPAmut_wt), "[.]"), "[", 1)
+
+
+###
+### compare DE genes with previous endo DE run:
+###
+diff_genes_3layers = readRDS(file.path(dir1, "oheachte/LSD1/Tissue_comparison/MergedDiffGenesData", "MergedDiffGenesData.rds"))
+diff_genes_3layers$sig.endoNew = ifelse(diff_genes_3layers$gene %in% resSigEndoCtrl$ensembl, TRUE, FALSE)
+table(diff_genes_3layers[,c("significant.endo", "sig.endoNew")])
+#798 are common, 371 are not sig in the 1st run!
+
+View(diff_genes_3layers[diff_genes_3layers$significant.endo == FALSE & diff_genes_3layers$sig.endoNew == TRUE,])
+
+# do the non-overlapping DE genes have low log2FCs?
+ggplot(data = diff_genes_3layers, aes(x = significant.endo, y = log2FoldChange.endo, fill = sig.endoNew)) + geom_boxplot() + 
+  theme_classic() + geom_hline(yintercept = 0, linetype = 2) #+ facet_wrap(~sig.endoNew)
+#yes, it is so!
+
+#lower baseMeans?
+ggplot(data = diff_genes_3layers, aes(x = significant.endo, y = log10(baseMean.endo), fill = sig.endoNew)) + geom_boxplot() + 
+  theme_classic()
+#nope! just log2FCs
+
+```
+
+
+```{r check number of DEG in se[VPA]}
+#select only VPA condition:
+which(colData(seVPA)$condition == "VPA")
+
+dds_VPAonly = DESeqDataSet(seVPA[,which(colData(seVPA)$condition == "VPA")], design = ~type)
+dds_VPAonly <- dds_VPAonly[ rowSums(counts(dds_VPAonly)) > 9, ]
+dds_VPAonly = DESeq(dds_VPAonly)
+# dds_all_mod$compare = factor(dds_all_mod$compare)
+res_VPAonly = results(dds_VPAonly)
+summary(res_VPAonly) # a bit more than using full set of samples with ctrl: 98 up, 141 down
+
+dds_CTRLonly = DESeqDataSet(seVPA[,which(colData(seVPA)$condition == "ctrl")], design = ~type)
+dds_CTRLonly <- dds_CTRLonly[ rowSums(counts(dds_CTRLonly)) > 9, ]
+dds_CTRLonly = DESeq(dds_CTRLonly)
+
+res_CTRLonly = results(dds_CTRLonly)
+summary(res_CTRLonly)
+```
+
+
+### Do usual QC plots and visualizations of the VPA dataset
+```{r VPA MAplots etc}
+
+# results above are not shrinked, if to do it - below is the command
+# resLFC <- lfcShrink(dds, coef="condition_treated_vs_untreated", type="apeglm")
+
+sum(res_CTRLmut_wt$padj < 0.1, na.rm=TRUE) #1170
+sum(res_VPAmut_wt$padj < 0.1, na.rm=TRUE) #21
+
+###
+#p-value distr:
+###
+hist(res_CTRLmut_wt$pvalue[res_CTRLmut_wt$baseMean > 1], breaks = 0:20/20,
+     col = "grey50", border = "white")
+hist(res_VPAmut_wt$pvalue[res_CTRLmut_wt$baseMean > 1], breaks = 0:20/20,
+     col = "grey50", border = "white")
+
+
+#MA plots:
+plotMA(res_VPAmut_wt, ylim = c(-5,5))
+plotMA(res_CTRLmut_wt)
+
+### volcano:
+library(EnhancedVolcano)
+
+res_VPAmut_wt_df = as.data.frame(res_VPAmut_wt)
+res_VPAmut_wt_df$geneName = egs_hg19_all$external_gene_name[match(res_VPAmut_wt_df$ensembl, egs_hg19_all$ensembl_gene_id)]
+res_VPAmut_wt_df = res_VPAmut_wt_df[order(res_VPAmut_wt_df$padj),]
+res_CTRLmut_wt_df = as.data.frame(res_CTRLmut_wt)
+res_CTRLmut_wt_df$geneName = egs_hg19_all$external_gene_name[match(res_CTRLmut_wt_df$ensembl, egs_hg19_all$ensembl_gene_id)]
+
+res_CTRLmut_wt_df %>%
+  subset(!is.na(ensembl) & padj < 0.1) %>%
+  nrow()
+
+pdf(file = file.path(dir1, "bunina/LSD1/VPAtreatment/output", "VolcanoVPActrlVSmut.pdf"), useDingbats = FALSE, width = 6, height = 7)
+EnhancedVolcano(res_VPAmut_wt_df, 
+    lab = res_VPAmut_wt_df$geneName, titleLabSize = 14,
+    title = "Endoderm VPA, LSD1mut vs WT", gridlines.major = FALSE,
+    gridlines.minor = FALSE, col = c(rep("grey",3), "red"),
+    x = 'log2FoldChange', pointSize = 1, ylim = c(0,7),
+    y = 'padj', pCutoff = 0.1, FCcutoff = 0, raster = TRUE)
+EnhancedVolcano(res_CTRLmut_wt_df,
+    lab = res_CTRLmut_wt_df$geneName, ylim = c(0,6.5),
+    title = "Endoderm VPA, LSD1mut vs WT", titleLabSize = 14,
+    x = 'log2FoldChange', pointSize = 1, gridlines.major = FALSE,
+    gridlines.minor = FALSE, col = c(rep("grey",3), "red"),
+    y = 'padj', pCutoff = 0.1, FCcutoff = 0, raster = TRUE)
+dev.off()
+
+### count plots of top signif genes Figure 4 ====
+
+dds_all_mod = readRDS(file.path(dir1, "bunina/LSD1/VPAtreatment/output", "dds_VPA_allPairs.rds"))
+vsd_all <- vst(dds_all_mod, blind=FALSE)
+
+res_CTRLmut_wt_df = res_CTRLmut_wt_df[order(res_CTRLmut_wt_df$padj),]
+#function taken from TimeCourseRNAseq.R
+
+plotManyCounts(genesTable = egs_hg19[egs_hg19$ensembl_gene_id %in% res_CTRLmut_wt_df[1:10,]$ensembl,], ddsObject = dds_all_mod )
+plotManyCounts(genesTable = egs_hg19[egs_hg19$external_gene_name == "KDM1A",], ddsObject = dds_all_mod, col2 = "type", col1 = "condition" )
+
+
+#using vst values:
+vsd_all_df = as.data.frame(assay(vsd_all))
+vsd_all_df$ensembl = sapply(strsplit(row.names(vsd_all_df), "[.]"), "[", 1)
+vsd_all_df$geneName = egs_hg19_all$external_gene_name[match(vsd_all_df$ensembl, egs_hg19_all$ensembl_gene_id)]
+vsd_all_df_l = gather(vsd_all_df, key = "sample", value = "normExpression", -ensembl, -geneName)
+vsd_all_df_l$type = sampleTab$type[match(vsd_all_df_l$sample, row.names(sampleTab))]
+vsd_all_df_l$type = factor(vsd_all_df_l$type, levels = c("wt","mut"))
+vsd_all_df_l$condition = sampleTab$condition[match(vsd_all_df_l$sample, row.names(sampleTab))]
+vsd_all_df_l$condition[vsd_all_df_l$condition == "ctrl"] <- "CTRL"
+
+pdf(file = file.path(dir1, "bunina/LSD1/VPAtreatment/output", "CountsTopSigGenesCTRL.pdf"), 
+    useDingbats = FALSE, width = 7, height = 3)
+vsd_all_df_l %>%
+  subset(ensembl %in% res_CTRLmut_wt_df[1:10,]$ensembl) %>%
+  ggplot(aes(x = condition, y = normExpression, color = type)) + 
+  geom_point(position=position_jitter(w=0.1,h=0), size = 0.5) + theme_classic() + 
+  scale_color_manual(values = c("#CC79A7", "#999999")) + facet_wrap(~geneName, nrow = 1)
+vsd_all_df_l %>%
+  subset(ensembl %in% res_CTRLmut_wt_df[1:10,]$ensembl) %>%
+  ggplot(aes(x = condition, y = normExpression, fill = type)) + 
+  geom_boxplot(outlier.shape = NA) + theme_classic() + 
+  scale_fill_manual(values = c("#CC79A7", "#999999")) + facet_wrap(~geneName, nrow = 1)
+#subset of top 20 sig genes:
+vsd_all_df_l %>%
+  subset(geneName %in% c("ANKRD33B", "MFSD2A", "OPCML", "PDE4B", "PROCA1")) %>%
+  ggplot(aes(x = condition, y = normExpression, color = type)) + 
+  geom_boxplot(outlier.shape = NA) + theme_bw() + geom_point(size = 1, position = position_jitterdodge()) +
+  facet_wrap(~geneName, nrow = 1)
+vsd_all_df_l %>%
+  subset(geneName %in% c("ANKRD33B", "MFSD2A", "OPCML", "PDE4B", "PROCA1")) %>%
+  ggplot(aes(x = condition, y = normExpression, color = type)) + 
+  geom_point(position=position_jitter(w=0.1,h=0), size = 1) + theme_bw() + 
+  facet_wrap(~geneName, nrow = 1)
+dev.off()
+
+###
+#now same but after shrinking:
+###
+res_CTRLmut_wt_shr <- lfcShrink(dds_all_mod, coef="compare_wt.ctrl_vs_mut.ctrl", type="apeglm") #VPA doesn't work!
+plotMA(res_CTRLmut_wt_shr)
+
+# using IHW:
+library("IHW") #install first
+resIHW <- results(dds, filterFun=ihw)
+summary(resIHW)
+
+#plot gene counts:
+d <- plotCounts(dds_all_mod, gene=which.min(res_CTRLmut_wt$padj), intgroup=c("type", "condition"), 
+                returnData=TRUE)
+library("ggplot2")
+ggplot(d, aes(x=condition, y=count, color = type)) + 
+  geom_point(position=position_jitter(w=0.1,h=0)) + 
+  scale_y_log10() + theme_classic() + scale_color_manual(values = c("#999999", "#CC79A7"))
+
+# visualize with heatmap:
+vsd_all <- vst(dds_all_mod, blind=FALSE)
+library("pheatmap")
+select <- order(rowMeans(counts(dds_all_mod,normalized=TRUE)),
+                decreasing=TRUE)[1:30]
+df <- as.data.frame(colData(dds_all_mod)[,c("condition","type")])
+pheatmap(assay(vsd_all)[select,], cluster_rows=FALSE, show_rownames=FALSE,
+         cluster_cols=TRUE, annotation_col=df)
+
+###
+### sample dists etc ##
+###
+sampleDists <- dist(t(assay(vsd_all)))
+sampleDists
+
+#visualize it:
+sampleDistMatrix <- as.matrix( sampleDists )
+# rownames(sampleDistMatrix) <- paste( vsd_all$condition, vsd_all$type, sep = " - " )
+colnames(sampleDistMatrix) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists,
+         col = colors)
+
+#PCA plot:
+pcaData <- plotPCA(vsd_all, intgroup = c( "condition", "type", "line"), returnData = TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+ggplot(pcaData, aes(x = PC1, y = PC2, color = line, shape = condition)) +
+  geom_point(size =3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() + theme_classic() +
+  ggtitle("PCA with VST data")
+
+#same but color by mut/wt:
+ggplot(pcaData, aes(x = PC1, y = PC2, color = type, shape = condition)) +
+  geom_point(size =3) +
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) +
+  coord_fixed() + theme_classic() +
+  ggtitle("PCA with VST data")
+
+###
+### MDS plot:
+###
+
+mds <- as.data.frame(colData(vsd_all))  %>%
+         cbind(cmdscale(sampleDistMatrix))
+ggplot(mds, aes(x = `1`, y = `2`, color = line, shape = condition)) +
+  geom_point(size = 2) + coord_fixed() + ggtitle("MDS with VST data") + theme_classic()
+
+```
+
+```{r VPA: GO enrichments of mut/wt in CTRL data}
+
+#first extract significant results:
+resSig_ctrl <- subset(res_CTRLmut_wt, padj < 0.1)
+resSig_ctrl
+resSig_ctrl = as.data.frame(resSig_ctrl)
+resSig_ctrl$ensembl = sapply(strsplit(row.names(resSig_ctrl), "[.]"), "[", 1)
+resSig_ctrl$direction = ifelse(resSig_ctrl$log2FoldChange > 0, "up", "down")
+resSig_ctrl$SYMBOL = egs_hg19_all$external_gene_name[match(resSig_ctrl$ensembl, egs_hg19_all$ensembl_gene_id)]
+
+backgr_genes = egs_hg19_all$external_gene_name[egs_hg19_all$ensembl_gene_id %in% 
+                                                 sapply(strsplit(row.names(res_CTRLmut_wt), "[.]"), "[", 1)]
+
+library(msigdbr)
+library(clusterProfiler)
+# msigdbr_show_species()
+
+#select set C2 - curated gene set, for the other options see this vignette: https://yulab-smu.github.io/clusterProfiler-book/chapter3.html#msigdb-analysis
+m_t2g <- msigdbr(species = "Homo sapiens", category = "C2") %>% 
+  dplyr::select(gs_name, gene_symbol)
+head(m_t2g)
+
+#modify the table to keep only Reactome/Kegg pathways:
+m_t2g$source = sapply(strsplit(m_t2g$gs_name, "_"), "[", 1)
+m_t2g_mod = subset(m_t2g, source %in% c("REACTOME", "KEGG"))
+m_t2g_mod$gs_name <- sub("REACTOME_", "", m_t2g_mod$gs_name)
+m_t2g_mod$gs_name <- sub("KEGG_", "", m_t2g_mod$gs_name)
+
+msig_ctrl = compareCluster(SYMBOL ~ direction, data = resSig_ctrl, fun = "enricher", TERM2GENE = m_t2g, 
+                                universe = backgr_genes, qvalueCutoff  = 0.1)
+dotplot(msig_ctrl, showCategory = 10, font.size = 6)
+msig_ctrl_df = msig_ctrl@compareClusterResult
+
+#use only Kegg/Reactome anno:
+msig_ctrl_m = compareCluster(SYMBOL ~ direction, data = resSig_ctrl, fun = "enricher", TERM2GENE = m_t2g_mod, 
+                                universe = backgr_genes, qvalueCutoff  = 0.1)
+dotplot(msig_ctrl_m, showCategory = 10, font.size = 8)
+msig_ctrl_m_df = msig_ctrl_m@compareClusterResult
+
+###
+# Hallmark set of genes:
+###
+m_t2g_H <- msigdbr(species = "Homo sapiens", category = "H") %>% 
+  dplyr::select(gs_name, gene_symbol)
+
+msig_ctrl_up_H = compareCluster(SYMBOL ~ direction, data = resSig_ctrl, fun = "enricher", TERM2GENE = m_t2g_H, 
+                                universe = backgr_genes, qvalueCutoff  = 0.1)
+msig_ctrl_up_H_df = msig_ctrl_up_H@compareClusterResult
+dotplot(msig_ctrl_up_H, showCategory = 10)
+
+
+```
+
+### Plot enriched gene sets in VPA/CTRL
+```{r Plot enriched gene sets in VPA/CTRL}
+
+#add VPA/ctrl column to each result table and
+#merge two result tables to one for plotting:
+res_CTRLmut_wt_df = as.data.frame(res_CTRLmut_wt) %>%
+  mutate(type = "CTRL")
+res_all_VPActrl = as.data.frame(res_VPAmut_wt) %>%
+  mutate(type = "VPA") %>%
+  bind_rows(., res_CTRLmut_wt_df)
+
+res_all_VPActrl$SYMBOL = egs_hg19_all$external_gene_name[match(res_all_VPActrl$ensembl, egs_hg19_all$ensembl_gene_id)]
+# res_all_VPActrl = res_all_VPActrl[!is.na(res_all_VPActrl$log2FoldChange),]
+
+# plot some of Kegg genes:
+library(ggbeeswarm)
+res_all_VPActrl %>%
+  subset(SYMBOL %in% unlist(strsplit(msig_ctrl_m_df$geneID[[1]], "/")) ) %>%
+  ggplot(aes(x = type, y = log2FoldChange, color = type)) + geom_violin(draw_quantiles = 0.5) + theme_classic() + 
+  geom_hline(yintercept = 0, linetype = 2) + geom_beeswarm(size = 0.7) + scale_color_manual(values = c("#999999", "#CC79A7"))
+
+#as line plots for each gene:
+res_all_VPActrl %>%
+  subset(SYMBOL %in% unlist(strsplit(msig_ctrl_m_df$geneID[[1]], "/")) ) %>%
+  ggplot(aes(x = type, y = log2FoldChange, color = SYMBOL, group = SYMBOL)) + geom_line() + theme_classic() + 
+  geom_hline(yintercept = 0, linetype = 2)
+
+
+
+```
+
+### VPA/CTRL for wt and mut separately
+```{r VPA/CTRL for wt and mut separately}
+seVPA = readRDS(file.path(dir1, "bunina/LSD1/VPAtreatment/output", "seVPA.rds"))
+colData(seVPA)
+seVPA$compare = paste(seVPA$type, seVPA$condition, sep = ".")
+seVPA$line = substr(row.names(colData(seVPA)), 1, 4)
+
+
+# dds_all_paired = DESeqDataSet(seVPA, design = ~line + compare) #doesn't work, not full rank matrix!
+dds_all_paired = DESeqDataSet(seVPA, design = ~line + condition)
+
+dds_all_paired <- dds_all_paired[ rowSums(counts(dds_all_paired)) > 9, ]
+dds_all_paired = DESeq(dds_all_paired)
+resultsNames(dds_all_paired)
+
+res_VPAvsCTRLall = results(dds_all_paired, contrast = c("condition", "VPA", "ctrl"))
+res_VPAvsCTRLall
+summary(res_VPAvsCTRLall) #lots of DEGs!
+res_VPAvsCTRLall$ensembl = sapply(strsplit(row.names(res_VPAvsCTRLall), "[.]"), "[", 1)
+res_VPAvsCTRLall$geneName = egs_hg19_all$external_gene_name[match(res_VPAvsCTRLall$ensembl, egs_hg19_all$ensembl_gene_id)]
+
+d <- plotCounts(dds_all_paired, gene=which.min(res_VPAvsCTRLall$padj), intgroup="compare", 
+                returnData=TRUE)
+#plot endoderm markers: EOMES, GATA6, FOXA1/2, SOX17, CLDN6
+d <- plotCounts(dds_all_paired, gene=which(res_VPAvsCTRLall$geneName == "CLDN6"), intgroup="compare", 
+                returnData=TRUE)
+d$line = substr(row.names(d), 1, 4)
+ggplot(d, aes(x=compare, y=count, color = line)) + 
+  geom_point(position=position_jitter(w=0.1,h=0)) + theme_classic()
+
+# altogether on one plot:
+d_list = list()
+for (i in c("EOMES", "GATA6", "FOXA1", "FOXA2", "SOX17", "CLDN6")) {
+  d_list[[i]] <- plotCounts(dds_all_paired, gene=which(res_VPAvsCTRLall$geneName == i), intgroup="compare", 
+                returnData=TRUE)
+  d_list[[i]]$line = substr(row.names(d), 1, 4)
+  d_list[[i]]$gene = i
+}
+d_all = do.call("rbind", d_list)
+
+pdf(file = file.path(dir1, "bunina/LSD1/VPAtreatment/output", "EndodermMarkersVPActrlCounts.pdf"), 
+    width = 6, height = 4, useDingbats = FALSE)
+ggplot(d_all, aes(x=compare, y=count, color = line)) + 
+  geom_point(position=position_jitter(w=0.1,h=0)) + theme_classic() + 
+  facet_wrap(~gene, scales = "fixed") + theme(axis.text.x = element_text(angle=90, hjust=1, vjust = 0.5, size = 8))
+dev.off()
+
+###
+### now separately for wt and mut:
+###
+
+
+### wt
+dds_wt_paired = DESeqDataSet(seVPA[,seVPA$type == "wt"], design = ~line + condition)
+dds_wt_paired <- dds_wt_paired[ rowSums(counts(dds_wt_paired)) > 8, ]
+dds_wt_paired = DESeq(dds_wt_paired)
+res_VPAvsCTRLwt = results(dds_wt_paired, contrast = c("condition", "VPA", "ctrl"))
+summary(res_VPAvsCTRLwt)
+res_VPAvsCTRLwtDF = as.data.frame(res_VPAvsCTRLwt)
+res_VPAvsCTRLwtDF$ensembl = sapply(strsplit(row.names(res_VPAvsCTRLwtDF), "[.]"), "[", 1)
+res_VPAvsCTRLwtDF$geneName = egs_hg19_all$external_gene_name[match(res_VPAvsCTRLwtDF$ensembl, egs_hg19_all$ensembl_gene_id)]
+
+### Volcano plot:
+library(EnhancedVolcano)
+EnhancedVolcano(res_VPAvsCTRLwtDF,
+    lab = res_VPAvsCTRLwtDF$geneName,
+    x = 'log2FoldChange',
+    y = 'pvalue')
+
+### mut
+dds_mut_paired = DESeqDataSet(seVPA[,seVPA$type == "mut"], design = ~line + condition)
+dds_mut_paired <- dds_mut_paired[ rowSums(counts(dds_mut_paired)) > 8, ]
+dds_mut_paired = DESeq(dds_mut_paired)
+res_VPAvsCTRLmut = results(dds_mut_paired, contrast = c("condition", "VPA", "ctrl"))
+summary(res_VPAvsCTRLmut)
+res_VPAvsCTRLmutDF = as.data.frame(res_VPAvsCTRLmut)
+res_VPAvsCTRLmutDF$ensembl = sapply(strsplit(row.names(res_VPAvsCTRLmutDF), "[.]"), "[", 1)
+res_VPAvsCTRLmutDF$geneName = egs_hg19_all$external_gene_name[match(res_VPAvsCTRLmutDF$ensembl, egs_hg19_all$ensembl_gene_id)]
+
+### Volcano plot:
+library(EnhancedVolcano)
+EnhancedVolcano(res_VPAvsCTRLmutDF,
+    lab = res_VPAvsCTRLmutDF$geneName,
+    x = 'log2FoldChange',
+    y = 'pvalue')
+
+### now merge the two tables to compare genes:
+res_VPAvsCTRLmerge = merge(res_VPAvsCTRLwtDF, res_VPAvsCTRLmutDF, by = "ensembl", suffixes = c(".wt", ".mut"), all = TRUE)
+res_VPAvsCTRLmerge$sig.wt = ifelse(res_VPAvsCTRLmerge$padj.wt < 0.1 & abs(res_VPAvsCTRLmerge$log2FoldChange.wt) > 0.58, TRUE, FALSE)
+res_VPAvsCTRLmerge$sig.mut = ifelse(res_VPAvsCTRLmerge$padj.mut < 0.1 & abs(res_VPAvsCTRLmerge$log2FoldChange.mut) > 0.58, TRUE, FALSE)
+
+# compare lists of significant genes:
+library(VennDiagram)
+vpa_wt_ctrl_list = list(wt = res_VPAvsCTRLmerge$ensembl[res_VPAvsCTRLmerge$sig.wt == TRUE], mut = res_VPAvsCTRLmerge$ensembl[res_VPAvsCTRLmerge$sig.mut == TRUE])
+vpa_wt_ctrl_list = lapply(vpa_wt_ctrl_list, function(x) x = x[!is.na(x)])
+vpa_wt_ctrl = venn.diagram(vpa_wt_ctrl_list, filename = NULL, cex = 2.5, cat.fontface = 3, lty =2)
+grid.draw(vpa_wt_ctrl)
+
+
+### GO enrichment:
+res_VPAvsCTRLmerge$geneName = egs_hg19_all$external_gene_name[match(res_VPAvsCTRLmerge$ensembl, egs_hg19_all$ensembl_gene_id)]
+backgr_genes = res_VPAvsCTRLmerge$geneName
+
+library(msigdbr)
+library(clusterProfiler)
+#select set C2 - curated gene set, for the other options see this vignette: https://yulab-smu.github.io/clusterProfiler-book/chapter3.html#msigdb-analysis
+m_t2g <- msigdbr(species = "Homo sapiens", category = "C2") %>% 
+  dplyr::select(gs_name, gene_symbol)
+#modify the table to keep only Reactome/Kegg pathways:
+m_t2g$source = sapply(strsplit(m_t2g$gs_name, "_"), "[", 1)
+m_t2g_mod = subset(m_t2g, source %in% c("REACTOME", "KEGG"))
+
+vpa_wt_ctrl_list = list(wt = res_VPAvsCTRLmerge$geneName[res_VPAvsCTRLmerge$sig.wt == TRUE], mut = res_VPAvsCTRLmerge$geneName[res_VPAvsCTRLmerge$sig.mut == TRUE])
+vpa_wt_ctrl_list = lapply(vpa_wt_ctrl_list, function(x) x = x[!is.na(x)])
+
+vpa_wt_ctrl_list_m = list(both = vpa_wt_ctrl_list[["wt"]][vpa_wt_ctrl_list[["wt"]] %in% vpa_wt_ctrl_list[["mut"]] ], wt_only = vpa_wt_ctrl_list[["wt"]][!(vpa_wt_ctrl_list[["wt"]] %in% vpa_wt_ctrl_list[["mut"]]) ], mut_only = vpa_wt_ctrl_list[["mut"]][!(vpa_wt_ctrl_list[["mut"]] %in% vpa_wt_ctrl_list[["wt"]]) ])
+
+msig_paired = compareCluster(geneClusters = vpa_wt_ctrl_list_m, fun = "enricher", TERM2GENE = m_t2g_mod, universe = backgr_genes, qvalueCutoff  = 0.1)
+dotplot(msig_paired, showCategory = 12, font.size = 8)
+msig_paired_df = msig_paired@compareClusterResult
+
+
+```
+
+
+
+### get normalized counts per sample:
+```{r}
+vsd_endo <- vst(dds_all, blind=FALSE)
+
+#now the same for iPSCs separately:
+dds_ipsc_mod = readRDS(file.path(dir1, "bunina/LSD1/RNAseq/iPSCs/output/Robjects",
+                                   "dds_iPSCsDadsKidsRNAseq_noPro3.Rds"))
+res_ipsc_mod = results(dds_ipsc_mod)
+vsd_ipsc <- vst(dds_ipsc_mod, blind=FALSE)
+
+### now merge two tables and make long format:
+colnames(assay(vsd_ipsc))
+
+all_counts = merge(assay(vsd_ipsc), assay(vsd_endo), by = 0)
+all_counts$ensembl = sapply(strsplit(all_counts$Row.names, "[.]"), "[", 1)
+
+#calculate endo-ipsc for each line:
+for (i in colnames(all_counts)[2:10]) {
+  all_counts[,paste0(i, "lfc_ctrl")] = all_counts[,paste0(i, "ctrl")] - all_counts[,i]
+  all_counts[,paste0(i, "lfc_VPA")] = all_counts[,paste0(i, "VPA")] - all_counts[,i]
+}
+
+
+all_counts_long = gather(all_counts[,29:47], key = "sample", value = "endo_vs_ipsc", -ensembl)
+
+annoDF = data.frame(sample = unique(all_counts_long$sample),  type = NA, condition = NA, line = NA)
+annoDF$condition = rep(c("ctrl", "VPA"), 9)
+annoDF$line = substr(annoDF$sample, 1, 4)
+
+all_counts_long$condition = annoDF$condition[match(all_counts_long$sample, annoDF$sample)]
+all_counts_long$line = annoDF$line[match(all_counts_long$sample, annoDF$sample)]
+all_counts_long$type = ifelse(all_counts_long$line %in% c("KSP1", "KSP2", "Pro4", "Pro8"), "mut", "wt")
+
+```
+
+

@@ -1,0 +1,895 @@
+---
+title: "LSD1 Fibroblasts RNAseq of two replicates, both families"
+author: "Daria"
+date: "2/7/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load bam files after alignment with STAR and sort/index:
+
+```{r}
+if (file.exists("/g/scb2/zaugg/bunina/WT129/crisprRNA/data/bams/Elavl18cl1.sorted.bam")) {
+  dir1 = "/g/scb2/zaugg"
+} else {
+  dir1 = "/Volumes/zaugg-1"
+}
+file.exists(file = file.path(dir1, "bunina/WT129/crisprRNA/data/bams", "Elavl18cl1.sorted.bam"))
+
+
+library("TxDb.Hsapiens.UCSC.hg19.knownGene")
+files = list.files(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/data/4.Postalignment"), 
+                   pattern = ".bam$", full.names = TRUE)
+filesSplit = sapply(strsplit(as.character(basename(files)),"[.]"),"[[", 1)
+sampleTab = data.frame(row.names = filesSplit, condition = c("control", "control", "control", "control", "patient", "patient", "patient", "patient"), replicate = rep(c(1,2),4), family = c("A", "A", "B", "B", "B", "B", "A", "A"))
+write.csv(sampleTab, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/data", "sampleTable.csv"), quote = FALSE)
+```
+
+## Load libraries
+```{r, message=FALSE, warning=FALSE}
+library("GenomicFeatures")
+library("Rsamtools")
+library("GenomicAlignments")
+library("BiocParallel")
+register(MulticoreParam(6))
+library("DESeq2")
+library("gplots")
+library("RColorBrewer")
+library("IHW")
+library("pheatmap")
+library("plyr")
+library("ggplot2")
+#library("ComplexHeatmap")
+#library("circlize")
+library(tidyr)
+library("ReportingTools")
+install.packages("ggrepel", .libPaths()[3], contriburl = "https://cran.r-project.org/src/contrib")
+library("pcaExplorer")
+library("biomaRt")
+```
+
+# Load files and count reads:
+
+```{r}
+bamfiles <- BamFileList(files, yieldSize=2000000)
+seqinfo(bamfiles[1])
+hg19gtf = file.path("/g/scb2/zaugg/zaugg_shared/annotations/hg19/Gencode_v19", 
+                    "gencode.v19.annotation.gtf")
+hg19 = makeTxDbFromGFF(hg19gtf, format="gtf", circ_seqs=character())
+(ebg_hg19 <- exonsBy(hg19, by="gene"))
+seFib <- summarizeOverlaps(features=ebg_hg19, reads=bamfiles,
+                           mode="Union",
+                           singleEnd=TRUE,
+                           ignore.strand=TRUE)
+saveRDS(seFib, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects", "sumOlapsDadsKidsFib.Rda"))
+seFib = readRDS(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects", "sumOlapsDadsKidsFib.Rda"))
+colData(seFib)
+(colData(seFib) <- DataFrame(sampleTab))
+seFib$condition
+round( colSums(assay(seFib)) / 1e6, 1 )
+```
+
+# Do the actual differential expression analysis:
+
+```{r}
+dds_fib = DESeqDataSet(seFib, design = ~ condition)
+dds_fib <- dds_fib[ rowSums(counts(dds_fib)) > 1, ]
+dds_fib <- DESeq(dds_fib)
+rownames(dds_fib) = sapply(strsplit(rownames(dds_fib), "[.]"), "[", 1)
+# saveRDS(dds_fib, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects", 
+#                                   "dds_fibDadsKidsMyRNAseq.Rds"))
+dds_fib = readRDS(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects", 
+                                   "dds_fibDadsKidsMyRNAseq.Rds"))
+res_fib <- results(dds_fib)
+# saveRDS(res_fib, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects", 
+#                                   "res_fibDadsKidsMyRNAseq.Rds"))
+# Produce a HTML report:
+# des2Report <- HTMLReport(shortName = "LSD1fib_my_DESeq2", title = "RNA-seq analysis of differential expression in LSD1 kids and dads using DESeq2", 
+#                          reportDirectory = "./reports", basePath = paste0(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output"))
+# publish(dds_fib, des2Report, pvalueCutoff=0.1, factor = colData(dds_fib)$condition, reportDir = "./reports")
+# finish(des2Report)
+# Explore PCAplots etc interactively:
+pcaExplorer(dds = dds_fib)
+
+#select genes with >10 counts:
+dds_fib10 = DESeqDataSet(seFib, design = ~ condition)
+dds_fib10 <- dds_fib10[ rowSums(counts(dds_fib10)) > 10, ]
+dds_fib10 <- DESeq(dds_fib10)
+rownames(dds_fib10) = sapply(strsplit(rownames(dds_fib10), "[.]"), "[", 1)
+# saveRDS(dds_fib10, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects",
+#                                   "dds_fib10countsMinDadsKidsMyRNAseq.Rds"))
+dds_fib10 = readRDS(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects",
+                                  "dds_fib10countsMinDadsKidsMyRNAseq.Rds"))
+res_fib10 <- results(dds_fib10)
+summary(res_fib10) #1488 up, 1178 down
+
+#export normalized counts of >10 rowsums genes for GRN pipeline:
+nCountsGRN = as.data.frame(counts(dds_fib10, normalized = TRUE))
+nCountsGRN$ENSEMBL = row.names(nCountsGRN)
+colnames(nCountsGRN)[1:8] <- c("Dad1R1", "Dad1R2", "Dad2R1", "Dad2R2", "Kid2R1", "Kid2R2", "Kid1R1", "Kid1R2")
+write.table(nCountsGRN[,c(9,1:4,7:8,5:6)], file = file.path(dir1, "bunina/LSD1/GRN/data", "KidsDadsRNA_counts_final.txt"),
+            quote = F, row.names = F, sep = "\t")
+```
+
+# Explore and summarize results:
+
+```{r}
+res_fib
+res_fib10
+res_fibOrdered <- res_fib[order(res_fib$padj),]
+res_fib10ordered = res_fib10[order(res_fib10$padj),]
+# saveRDS(res_fib10ordered, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects",
+#                                            "res_fib10ordered.Rds"))
+res_fib10ordered = readRDS(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects", "res_fib10ordered.Rds"))
+
+# Export to csv (add common gene names):
+library(biomaRt)
+mart_hg19 = useMart(host='grch37.ensembl.org', biomart = "ENSEMBL_MART_ENSEMBL", 
+               dataset = "hsapiens_gene_ensembl")
+# res_fibOrdered_df = as.data.frame(res_fibOrdered)
+res_fibOrdered_df = as.data.frame(res_fib10ordered)
+res_fibOrdered_df$ensembl = sapply(strsplit(row.names(res_fibOrdered_df), "[.]"), "[", 1)
+res_fibOrdered_df$geneName = NA
+# genes_hg19 = res_fibOrdered_df$ensembl
+genes_hg19 = rownames(res_fibOrdered_df)
+
+G_list <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id", 
+                                                          "hgnc_symbol", "description"), values=genes_hg19, mart= mart_hg19)
+res_fibOrdered_df$geneName = G_list$hgnc_symbol[match(rownames(res_fibOrdered_df), G_list$ensembl_gene_id)]
+# res_fibOrdered_df$description = G_list$description[match(rownames(res_fibOrdered_df), G_list$ensembl_gene_id)]
+# write.csv(res_fibOrdered_df, file=file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output", 
+#                                                         "LSD1fibDadsKids_deseq2ConditionResult.csv"))
+# summary(res_fib)
+
+# How many genes are with padj < 0.1?
+# sum(res_fib$padj < 0.1, na.rm=TRUE)
+sum(res_fib10$padj < 0.05, na.rm=TRUE)
+# res_fibSig = subset(res_fibOrdered, padj < 0.1)
+res_fibSig = subset(res_fib10, padj < 0.1 ) # & abs(log2FoldChange) > 0.5 # 1500 total with lfc threshold
+summary(res_fibSig)
+
+res_fibSig_df = as.data.frame(res_fibSig)
+#res_fibSig_df$Name = sapply(strsplit(row.names(res_fibSig_df), "[.]"), "[", 1)
+# write.csv(subset(res_fibOrdered_df, padj < 0.1), file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output", 
+#                                           "LSD1fibDadsKids_deseq2ConditionResultSig.csv"))
+
+
+#how many of the significant genes are ageing genes ====
+
+## (taken from the chunk 12 below! )
+res_fibSig_df$ageinG = ifelse(res_fibSig_df$ensembl %in% ageGenes_sig$ensembl, TRUE, FALSE)
+res_fibSig_df$ageinG300 = ifelse(res_fibSig_df$ensembl %in% ageGenes300m$ensembl_gene_id, TRUE, FALSE)
+table(res_fibSig_df[,8:9])
+
+
+# How many genes are with lfcThreshold = 0.5?
+#dont do like this: res_fibLFC = results(dds_fib, lfcThreshold = 0.5) better filter later!!!
+
+res_fibLFC = subset(res_fib10, padj < 0.1 & abs(log2FoldChange) > 0.5)
+summary(res_fibLFC)
+res_fibLFCSig = subset(res_fibLFC, padj < 0.1)
+# write.csv(as.data.frame(res_fibLFCSig), file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output", 
+#                                           "LSD1fibDadsKids_deseq2ConditionResultSigLFC.csv"))
+res_fibLFCSig = read.csv(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output", 
+                                   "LSD1fibDadsKids_deseq2ConditionResultSigLFC.csv"))
+
+# P-values histogram:
+# hist(res_fib$pvalue[res_fib$baseMean > 1], breaks=0:20/20, col="grey50", border="white")
+hist(res_fib10$pvalue, breaks=0:20/20, col="grey50", border="white")
+
+# MA plot:
+# plotMA(res_fib, main="LSD1 fibroblasts kids vs dads", ylim=c(-2,2))
+
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "MAplotKidsDads_fib10counts.pdf"), width = 5, height = 4, useDingbats = FALSE)
+plotMA(res_fib10, main="Gene expression in fibroblasts, kids vs dads", ylim=c(-2,2))
+plotMA(res_fib10, main="Gene expression in fibroblasts, kids vs dads", ylim=c(-2,2), alpha = 0.05)
+hist(res_fib10$pvalue, breaks=0:20/20, col="grey50", border="white")
+dev.off()
+
+# Plot counts for a selected gene:
+dfib <- plotCounts(dds_fib10, gene=which.min(res_fib10$padj), intgroup="condition",
+returnData=TRUE)
+ggplot(dfib, aes(x=condition, y=count)) + geom_point(position=position_jitter(w=0.1,h=0)) + 
+  ggtitle(rownames(res_fib10[which.min(res_fib10$padj),]))
+```
+
+# Data transformation and visualization:
+
+```{r}
+### all re-done with dds_fib10, filtered for min of 10 counts!
+vsd_fib <- varianceStabilizingTransformation(dds_fib10, blind=FALSE)
+head(assay(vsd_fib), 5)
+select_fib <- order(rowMeans(counts(dds_fib10,normalized=TRUE)), 
+                decreasing=TRUE)[1:30]
+df_fib <- as.data.frame(colData(dds_fib10)[,c("condition","family")])
+# pheatmap(assay(vsd_fib)[select_fib,], cluster_rows=FALSE, show_rownames=FALSE, cluster_cols=FALSE, annotation_col=df_fib)
+# plot 113 lfc genes:
+pheatmap(assay(vsd_fib)[rownames(res_fibLFCSig),], cluster_rows=TRUE, show_rownames=FALSE, cluster_cols=TRUE, annotation_col=df_fib)
+
+# Sample-to-sample distances heatmap:
+sampleDists <- dist(t(assay(vsd_fib)))
+sampleDistMatrix_fib <- as.matrix(sampleDists)
+rownames(sampleDistMatrix_fib) <- paste(vsd_fib$condition, vsd_fib$family, sep="-")
+colnames(sampleDistMatrix_fib) <- NULL
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+pheatmap(sampleDistMatrix_fib, 
+         clustering_distance_rows=sampleDists, 
+         clustering_distance_cols=sampleDists, 
+         col=colors)
+
+# PCA plot:
+data_fib <- plotPCA(vsd_fib, intgroup=c("condition", "family"), returnData=TRUE)
+percentVar_fib <- round(100 * attr(data_fib, "percentVar"))
+
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "PCAKidsDads_fib10counts.pdf"), width = 4.5, height = 4, useDingbats = FALSE)
+ggplot(data_fib, aes(PC1, PC2, color=condition, shape=family)) + 
+  geom_point(size=3) + 
+  xlab(paste0("PC1: ",percentVar_fib[1],"% variance")) + 
+  ylab(paste0("PC2: ",percentVar_fib[2],"% variance")) + 
+  coord_fixed() + theme_classic()
+dev.off()
+```
+
+## TF motifs in up/down gene promoters
+```{r}
+
+#Prepare gene ids for homer run:
+write.table(res_fibOrdered_df$ensembl, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/homer", "allGenesBckgr_fib10.txt"), quote = F, row.names = F, col.names = F)
+
+res_fibSig_df$ensembl = row.names(res_fibSig_df)
+#now for sig. up/down genes:
+write.table(res_fibSig_df$ensembl[res_fibSig_df$log2FoldChange > 0], file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/homer", "UPkids_fdr01.txt"), quote = F, row.names = F, col.names = F)
+write.table(res_fibSig_df$ensembl[res_fibSig_df$log2FoldChange < 0], file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/homer", "UPdads_fdr01.txt"), quote = F, row.names = F, col.names = F)
+
+```
+
+
+# Compare GRN genes expression in all tissues LSD1mut/WT:
+```{r}
+
+vsd_list = list()
+
+#fibro:
+dds_fib10 = readRDS(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects",
+                                   "dds_fib10countsMinDadsKidsMyRNAseq.Rds"))
+vsd_fib <- varianceStabilizingTransformation(dds_fib10, blind=FALSE)
+vsd_list[["fibro"]] = as.data.frame(assay(vsd_fib))
+
+#ipscs:
+dds_ipsc_mod = readRDS(file.path(dir1, "bunina/LSD1/RNAseq/iPSCs/output/Robjects",
+                                   "dds_iPSCsDadsKidsRNAseq_noPro3.Rds"))
+vsd_ipsc <- varianceStabilizingTransformation(dds_ipsc_mod, blind=FALSE)
+vsd_list[["ipsc"]] = as.data.frame(assay(vsd_ipsc))
+
+for (i in c("endo", "card", "neur")) {
+  dds <- readRDS(file = file.path(dir1, paste0("oheachte/LSD1/", i, "_RNAseq/Saved_objects/dds.rds") ))
+  vsd <- varianceStabilizingTransformation(dds, blind=FALSE)
+  vsd_list[[i]] = as.data.frame(assay(vsd))
+}
+
+colnames(vsd_list[["neur"]])[1:18] <- colnames(vsd_list[["endo"]])[1:18]
+
+#now add a condition column and merge data for plotting:
+for (i in c("fibro", "ipsc", "endo", "card", "neur")) {
+  vsd_list[[i]]$ensembl <- sapply(strsplit(row.names(vsd_list[[i]]), "[.]"), "[", 1)
+  vsd_list[[i]] = vsd_list[[i]] %>%
+    pivot_longer(!ensembl, names_to = "sample", values_to = "normExpr") %>%
+    mutate(cellType = i)
+}
+
+vsd_all_tissues = do.call("rbind", vsd_list)
+
+df_allSamples = data.frame(old = unique(vsd_all_tissues$sample), new = NA)
+df_allSamples$type = substr(df_allSamples$old, 1,3)
+unique(df_allSamples$type)
+df_allSamples$new = ifelse(df_allSamples$type %in% c("Dad", "KSF"), "WT", "LSD1mut")
+
+vsd_all_tissues$type = df_allSamples$new[match(vsd_all_tissues$sample, df_allSamples$old)]
+vsd_all_tissues$geneName = egs_hg19_all$external_gene_name[match(vsd_all_tissues$ensembl, egs_hg19_all$ensembl_gene_id)]
+
+### plot cell cycle genes from endo GO term:
+cell_cycleGenes = unlist(strsplit(msig_subnet20tfs_df$geneID[msig_subnet20tfs_df$ID == "REACTOME_CELL_CYCLE_MITOTIC"], "/"))
+
+pdf(file = file.path(dir1, "bunina/LSD1/GRN/output/plots/newGRN2020", "GOcellCycleViolinAlltissues.pdf"), 
+    useDingbats = FALSE, width = 5, height = 2.5)
+vsd_all_tissues %>%
+  subset(geneName %in% cell_cycleGenes) %>%
+  mutate(cellType = factor(cellType, levels = c("fibro", "ipsc", "endo", "card", "neur"))) %>%
+  mutate(type = factor(type, levels = c("WT", "LSD1mut")) ) %>%
+  ggplot(aes(x = cellType, y = normExpr, fill = type)) + 
+  geom_violin(draw_quantiles = 0.5) + theme_classic()
+dev.off()
+
+```
+
+
+
+## GO enrichment using clusterProfiler:
+
+```{r}
+
+library(clusterProfiler)
+
+res_fibSig = subset(res_fib10, padj < 0.1 )
+res_fibSig_df = as.data.frame(res_fibSig)
+res_fibSig_df$geneType = ifelse(res_fibSig_df$log2FoldChange > 0, "up_kids", "down_kids")
+res_fibSig_df$geneName = egs_hg19$external_gene_name[match(row.names(res_fibSig_df), egs_hg19$ensembl_gene_id)]
+table(res_fibSig_df$geneType)
+universe_fib = egs_hg19$external_gene_name[egs_hg19$ensembl_gene_id %in% row.names(res_fib10)]
+
+fibGOnew = compareCluster(geneName ~ geneType, data = res_fibSig_df, fun = "enrichGO", keyType = "SYMBOL", pvalueCutoff = 0.05, qvalueCutoff  = 0.05, OrgDb = org.Hs.eg.db, ont = "BP", universe = universe_fib)
+
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "GOkidsDadsAllsignif.pdf"), width = 4.5, height = 3.5, useDingbats = FALSE)
+dotplot(fibGOnew, showCategory = 7, font.size = 8)
+#after removing ageing genes:
+dotplot(fibGOnew_noAge, showCategory = 7, font.size = 8)
+dev.off()
+
+fibGOnew_df = as.data.frame(fibGOnew@compareClusterResult)
+fibGOnew_df$Ratio = fibGOnew_df$Count / as.numeric(sapply(strsplit(fibGOnew_df$GeneRatio, "/"), "[",2))
+  top_n_terms_fib = fibGOnew_df %>%
+     group_by(geneType) %>%
+    arrange(Ratio) %>%
+     top_n(6)
+
+#are genes in GO terms ageing ones?
+fibGOnew_df$ageinGcount = NA
+for (i in 1:nrow(fibGOnew_df)) {
+  genes_sel = unlist(strsplit(fibGOnew_df[i,]$geneID, "/"))
+  fibGOnew_df[i,]$ageinGcount = length(genes_sel[genes_sel %in% ageGenes_sig$HGNC_symbol | genes_sel %in% ageGenes300$symbol])
+}
+
+#do GO enrichments after removing ageing genes:
+res_fibSig_df_noAge = subset(res_fibSig_df, !(row.names(res_fibSig_df) %in% ageGenes300m$ensembl_gene_id) )
+# res_fibSig_df_noAge = res_fibSig_df[res_fibSig_df$ageinG == FALSE & res_fibSig_df$ageinG300 == FALSE,]
+universe_fib_m = universe_fib[!(universe_fib %in% ageGenes300m$symbol )]
+
+fibGOnew_noAge = compareCluster(geneName ~ geneType, data = res_fibSig_df_noAge, fun = "enrichGO", keyType = "SYMBOL", pvalueCutoff = 0.05, qvalueCutoff  = 0.05, OrgDb = org.Hs.eg.db, ont = "BP", universe = universe_fib_m)
+
+dotplot(fibGOnew_noAge, showCategory = 7, font.size = 8)
+fibGOnew_noAge_df = as.data.frame(fibGOnew_noAge@compareClusterResult)
+
+### plot some genes:
+plotManyCounts = function(genesTable, withNames = TRUE, ddsObject = dds_ipsc, modRowNames = TRUE, col1 = "condition", col2 = "individual", logScale = FALSE) {
+  if (modRowNames == TRUE) {
+  row.names(ddsObject) = sapply(strsplit(rownames(ddsObject), "[.]"), "[", 1)
+  }
+  genesList = rownames(ddsObject)[rownames(ddsObject) %in% genesTable$ensembl_gene_id]
+  d = list()
+  for (i in 1:length(genesList)) { 
+    d[[genesList[[i]]]] <- plotCounts(ddsObject, gene=rownames(ddsObject)[pmatch(genesList[i], rownames(ddsObject))], 
+                         intgroup=c(col1), returnData=TRUE) 
+    }
+  d_m = do.call(what = cbind, args = d)
+  cols = seq(1,length(genesList)*2,2)
+d_m = d_m[,c(cols, length(genesList)*2)]
+colnames(d_m)[1:length(genesList)] <- sapply(strsplit(colnames(d_m)[1:length(genesList)], "[.]"), "[", 1)
+colnames(d_m)[length(colnames(d_m))] = col1
+if (withNames == TRUE) {
+  for (i in 1:length(colnames(d_m)[1:length(genesList)])) {
+    colnames(d_m)[i] = as.character(genesTable[genesTable$ensembl_gene_id %in% colnames(d_m)[i] ,]$external_gene_name)
+  }
+}
+d_m[,col2] <- colData(ddsObject)[,col2]
+d_long = gather(d_m, gene, normExpr, - all_of(col1), - all_of(col2), factor_key = TRUE)
+if (logScale == TRUE) {
+  ggplot(d_long, aes(x=d_long[,col1], y=log2(normExpr), colour = d_long[,col2])) + ggtitle("Expression of genes") +
+  geom_point(position=position_jitter(w=0.1,h=0)) + facet_wrap(~gene, scales = "free")
+}
+else {
+  ggplot(d_long, aes(x= d_long[,col1], y=normExpr, colour = d_long[,col2])) + ggtitle("Expression of genes") +
+  geom_point(position=position_jitter(w=0.1,h=0)) + facet_wrap(~gene, scales = "free")
+}
+}
+
+matrixG_fib = egs_hg19[egs_hg19$external_gene_name %in% unlist( strsplit(fibGOnew_noAge_df$geneID[[1]], "/") ), ] 
+
+plotManyCounts(matrixG_fib[41:60,], ddsObject = dds_fib10, col2 = "family")
+
+
+```
+
+## Correlate TFs activity from Ivan's pipeline with RNAseq LFCs:
+
+```{r}
+
+####
+### new data diffTF run 2019:
+###
+
+#new run of diffTF is here: /g/scb2/zaugg/bunina/LSD1/ATACseq/output/extension50
+TFresults = read.table(file = file.path(dir1, "bunina/LSD1/ATACseq/output/extension50/LSD1_2019.summary.tsv"), 
+                       header = T, sep = "\t")
+hocoIDs = read.table(file = file.path(dir1, "bunina/LSD1/ATACseq/data", "HOCOTFID2ENSEMBL.txt"), header = T)
+TFresults$ensembl = hocoIDs$ENSEMBL[match(TFresults$TF, hocoIDs$HOCOID)]
+# write.csv(TFresults, file = file.path(dir1, "bunina/LSD1/ATACseq/output", "LSD1_2019.summaryEnsemblIDs.csv"), quote = F, row.names = F)
+TFresults$type = ifelse(TFresults$weighted_meanDifference < 0, "UP_kids", "UP_dads")
+TFresults_sig = TFresults[TFresults$Cohend_factor != 1 & TFresults$pvalueAdj < 0.05,]
+
+TFactiv_vs_RNAexpr = merge(TFresults, res_fibOrdered_df, by = "ensembl")
+#correct the direction of diffTF fold changes to compare properly:
+TFactiv_vs_RNAexpr$weighted_meanDiff_mod = -TFactiv_vs_RNAexpr$weighted_meanDifference
+TFactiv_vs_RNAexpr$sigTFs = ifelse(TFactiv_vs_RNAexpr$Cohend_factor !=1 & TFactiv_vs_RNAexpr$pvalueAdj < 0.05, TRUE, FALSE)
+TFactiv_vs_RNAexpr$sigAny = ifelse((TFactiv_vs_RNAexpr$Cohend_factor !=1 & TFactiv_vs_RNAexpr$pvalueAdj < 0.05) | TFactiv_vs_RNAexpr$padj < 0.1, TRUE, FALSE)
+TFactiv_vs_RNAexpr$sigBoth = ifelse(TFactiv_vs_RNAexpr$Cohend_factor !=1 & TFactiv_vs_RNAexpr$pvalueAdj < 0.05 & TFactiv_vs_RNAexpr$padj < 0.1, TRUE, FALSE)
+
+TFactiv_vs_RNAexpr$sigTFs = factor(TFactiv_vs_RNAexpr$sigTFs, levels = c(TRUE, FALSE))
+TFactiv_vs_RNAexpr$sigAny = factor(TFactiv_vs_RNAexpr$sigAny, levels = c(TRUE, FALSE))
+TFactiv_vs_RNAexpr$sigBoth = factor(TFactiv_vs_RNAexpr$sigBoth, levels = c(TRUE, FALSE))
+
+TFactiv_vs_RNAexpr$sigBoth[is.na(TFactiv_vs_RNAexpr$sigBoth)] <- FALSE
+
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "TFactiv_vs_TFexpr_dots.pdf"), width = 6, height = 5, useDingbats = FALSE)
+ggplot(data = TFactiv_vs_RNAexpr, aes(x = weighted_meanDiff_mod, y = log2FoldChange)) + 
+  geom_point(aes(color = sigTFs, shape = ageingG), size = 0.7) + theme_classic() + 
+  geom_text_repel(data = subset(TFactiv_vs_RNAexpr, sigBoth == TRUE), 
+                  aes(label = TF), box.padding = 0.15, size = 2, segment.size = 0.1)
+ggplot(data = TFactiv_vs_RNAexpr, aes(x = weighted_meanDiff_mod, y = log2FoldChange)) + 
+  geom_point(aes(color = sigAny, shape = ageingG), size = 0.7) + theme_classic() + 
+  geom_text_repel(data = subset(TFactiv_vs_RNAexpr, sigAny == TRUE), 
+                  aes(label = TF), box.padding = 0.15, size = 1.5, segment.size = 0.1)
+dev.off()
+
+# Check if TFs are among the ageing genes:
+TFactiv_vs_RNAexpr$ageingG = ifelse(TFactiv_vs_RNAexpr$ensembl %in% ageGenes_sig$ensembl, TRUE, FALSE)
+TFactiv_vs_RNAexpr$ageingG300 = ifelse(TFactiv_vs_RNAexpr$ensembl %in% ageGenes300m$ensembl_gene_id, TRUE, FALSE)
+table(TFactiv_vs_RNAexpr$ageingG) #37
+fisher.test(table(TFactiv_vs_RNAexpr[,c(21,24)])) #not signif.
+
+table(TFactiv_vs_RNAexpr$ageingG300) #54
+fisher.test(table(TFactiv_vs_RNAexpr[,c(21,25)])) #not signif.
+
+table(TFactiv_vs_RNAexpr[,24:25])
+
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "TFactiv_vs_TFexpr_dots_sigBoth.pdf"), width = 4.5, height = 4, useDingbats = FALSE)
+ggplot(data = TFactiv_vs_RNAexpr, aes(x = weighted_meanDiff_mod, y = log2FoldChange)) + 
+  geom_point(aes(color = sigBoth, shape = ageingG), size = 0.4) + theme_classic() + 
+  geom_text_repel(data = subset(TFactiv_vs_RNAexpr, sigBoth == TRUE), 
+                  aes(label = TF), box.padding = 0.15, size = 3, segment.size = 0.1) + 
+  geom_vline(xintercept = 0, linetype = 2, size = 0.5, color = "darkgrey") + geom_hline(yintercept = 0, linetype = 2, size = 0.5, color = "darkgrey")
+#same but taking 300 ageing genes:
+ggplot(data = TFactiv_vs_RNAexpr, aes(x = weighted_meanDiff_mod, y = log2FoldChange)) + 
+  geom_point(aes(color = sigBoth, shape = ageingG300), size = 0.4) + theme_classic() + 
+  geom_text_repel(data = subset(TFactiv_vs_RNAexpr, sigBoth == TRUE), 
+                  aes(label = TF), box.padding = 0.15, size = 3, segment.size = 0.1) + 
+  geom_vline(xintercept = 0, linetype = 2, size = 0.5, color = "darkgrey") + geom_hline(yintercept = 0, linetype = 2, size = 0.5, color = "darkgrey")
+#below removed all ageing TFs:
+ggplot(data = subset(TFactiv_vs_RNAexpr, ageingG == FALSE & ageingG300 == FALSE), aes(x = weighted_meanDiff_mod, y = log2FoldChange)) + 
+  geom_point(aes(color = sigBoth), size = 0.4) + theme_classic() + 
+  geom_text_repel(data = subset(TFactiv_vs_RNAexpr, ageingG == FALSE & ageingG300 == FALSE & sigBoth == TRUE), 
+                  aes(label = TF), box.padding = 0.15, size = 3, segment.size = 0.1) + 
+  geom_vline(xintercept = 0, linetype = 2, size = 0.5, color = "darkgrey") + geom_hline(yintercept = 0, linetype = 2, size = 0.5, color = "darkgrey")
+dev.off()
+
+TFactiv_vs_RNAexpr[TFactiv_vs_RNAexpr$TF == "FOXF2",]
+
+cor(TFactiv_vs_RNAexpr$weighted_meanDiff_mod, TFactiv_vs_RNAexpr$log2FoldChange) #0.069
+cor(TFactiv_vs_RNAexpr$weighted_meanDiff_mod[!is.na(TFactiv_vs_RNAexpr$sigBoth) & TFactiv_vs_RNAexpr$sigBoth == TRUE], TFactiv_vs_RNAexpr$log2FoldChange[!is.na(TFactiv_vs_RNAexpr$sigBoth) & TFactiv_vs_RNAexpr$sigBoth == TRUE]) #0.248
+
+
+```
+
+## Check ageing genes in TFs and differential genes:
+```{r}
+### data taken from https://genomebiology.biomedcentral.com/articles/10.1186/gb-2013-14-7-r75#Sec19 "Pvalues for ageeffect in skin tissue"
+
+ageGenes = read.table(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/data", "AgeingGenesPvaluesList_from_gb-2013-14-7-r75.txt"), 
+                       sep = "\t", stringsAsFactors = FALSE)
+colnames(ageGenes) <- as.character(ageGenes[1,])
+ageGenes = ageGenes[-1,]
+colnames(ageGenes)
+
+#add ensembl gene ids to the table:
+G_listAge = getBM(filters= "hgnc_symbol", attributes= c("ensembl_gene_id", 
+                                                          "hgnc_symbol", "description"), values=ageGenes$HGNC_symbol, mart= mart_hg19)
+
+ageGenes_m = merge(ageGenes, G_listAge[,1:2], by.x = "HGNC_symbol", by.y = "hgnc_symbol")
+ageGenes_m$BH_corrected = as.numeric(ageGenes_m$BH_corrected)
+ageGenes_m$sig = ifelse(ageGenes_m$BH_corrected < 0.01, TRUE, FALSE) #in the paper they took this threshold, do the same here
+table(ageGenes_m$sig) #2495 - some are duplicated ensembl ids!
+length(unique(ageGenes_m$HGNC_symbol[ageGenes_m$sig == TRUE])) #1357 unique genes
+
+ageGenes_sig = ageGenes_m[ageGenes_m$sig == TRUE,]
+saveRDS(ageGenes_sig, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output", "ageGenes_sig_pval.Rds"))
+
+### same but taking only confirmed ~300 ageing genes from here: http://genomics.senescence.info/genes/allgenes.php
+ageGenes300 = read.csv(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/data", "Ageing_human_genes/genage_human.csv"), stringsAsFactors = FALSE)
+
+#add ensembl gene ids to the table:
+G_list300 <- getBM(filters= "entrezgene_id", attributes= c("ensembl_gene_id", 
+                                                          "hgnc_symbol", "description", "entrezgene_id"), values=ageGenes300$entrez.gene.id, mart= mart_hg19)
+
+ageGenes300m = merge(ageGenes300, G_list300[,1:2], by.x = "symbol", by.y = "hgnc_symbol")
+length(unique(ageGenes300m$symbol))
+#340 ensembl ids for 307 genes, whatever, take all
+saveRDS(ageGenes300m, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output", "ageGenes300m.Rds"))
+ageGenes300m = readRDS(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output", "ageGenes300m.Rds"))
+
+```
+
+
+
+# Do analysis for 2 families separately:
+```{r}
+seFib = readRDS(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects", "sumOlapsDadsKidsFib.Rda"))
+(colData(seFib) <- DataFrame(sampleTab))
+seFib$condition
+se_family1 = seFib[,c(1:2,7:8)]
+se_family2 = seFib[,c(3:6)]
+dds_family1 = DESeqDataSet(se_family1, design = ~ condition)
+dds_family1 <- dds_family1[ rowSums(counts(dds_family1)) > 1, ]
+dds_family1 <- DESeq(dds_family1)
+rownames(dds_family1) = sapply(strsplit(rownames(dds_family1), "[.]"), "[", 1)
+# saveRDS(dds_family1, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects",
+#                                   "dds_fibFamily1MyRNAseq.Rds"))
+dds_family1 = readRDS(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects", 
+                                   "dds_fibFamily1MyRNAseq.Rds"))
+res_family1 <- results(dds_family1)
+summary(res_family1)
+saveRDS(res_family1, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects", 
+                                 "res_fibFamily1MyRNAseq.Rds"))
+## for family2:
+dds_family2 = DESeqDataSet(se_family2, design = ~ condition)
+dds_family2 <- dds_family2[ rowSums(counts(dds_family2)) > 1, ]
+dds_family2 <- DESeq(dds_family2)
+rownames(dds_family2) = sapply(strsplit(rownames(dds_family2), "[.]"), "[", 1)
+# saveRDS(dds_family2, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects",
+#                                   "dds_fibfamily2MyRNAseq.Rds"))
+dds_family2 = readRDS(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects", 
+                                   "dds_fibfamily2MyRNAseq.Rds"))
+res_family2 <- results(dds_family2)
+summary(res_family2)
+saveRDS(res_family2, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects", 
+                                 "res_fibFamily2MyRNAseq.Rds"))
+res_fam1_df = as.data.frame(res_family1)
+res_fam2_df = as.data.frame(res_family2)
+res_fam1_df$ensembl_gene_id = row.names(res_fam1_df)
+res_fam2_df$ensembl_gene_id = row.names(res_fam2_df)
+res_2fam = merge(res_fam1_df, res_fam2_df, by = "ensembl_gene_id", suffixes = c(".fam1", ".fam2"))
+genes_hg19 = res_2fam$ensembl_gene_id
+mart_hg19 = useMart(host='grch37.ensembl.org', biomart = "ENSEMBL_MART_ENSEMBL", 
+               dataset = "hsapiens_gene_ensembl")
+G_list <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id", 
+                                                          "hgnc_symbol", "description"), values=genes_hg19, mart= mart_hg19)
+res_2fam$geneName = G_list$hgnc_symbol[match(res_2fam$ensembl_gene_id, G_list$ensembl_gene_id)]
+res_2fam$description = G_list$description[match(res_2fam$ensembl_gene_id, G_list$ensembl_gene_id)]
+# write.csv(res_2fam, file=file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output",
+#                                                         "LSD1fib2fam_deseq2ConditionResult.csv"))
+res_2fam_sig = res_2fam[res_2fam$padj.fam1 < 0.1 | res_2fam$padj.fam2 < 0.1,]
+res_2fam_sig = res_2fam_sig[complete.cases(res_2fam_sig),]
+# write.csv(res_2fam_sig, file=file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output",
+#                                                         "LSD1fib2fam_deseq2ConditionResultSig.csv"))
+res_fam1sig = subset(res_family1, padj < 0.1)
+res_fam2sig = subset(res_family2, padj < 0.1)
+length(row.names(res_fam1sig)[row.names(res_fam1sig) %in% row.names(res_fam2sig)])
+
+#
+resFam1lfc = results(dds_family1, lfcThreshold = 0.5)
+nrow(subset(resFam1lfc, padj < 0.1))
+resFam1lfc_allValues = res_2fam[res_2fam$ensembl_gene_id %in% row.names(subset(resFam1lfc, padj < 0.1)),]
+# write.csv(resFam1lfc_allValues, file=file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output",
+#                                                         "LSD1fib2fam_fam1lfcResults.csv"))
+
+```
+
+
+# Compare kid1 vs kid2:
+```{r}
+files = list.files(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/data/4.Postalignment"), pattern = ".bam$", full.names = TRUE)
+files = files[5:8]
+filesSplit = sapply(strsplit(as.character(basename(files)),"[.]"),"[[", 1)
+sampleTab = data.frame(row.names = filesSplit, condition = c("control", "control", "patient", "patient"), replicate = rep(c(1,2),2))
+
+bamfiles <- BamFileList(files, yieldSize=2000000)
+seqinfo(bamfiles[1])
+hg19gtf = file.path("/g/scb2/zaugg/zaugg_shared/annotations/hg19/Gencode_v19", 
+                    "gencode.v19.annotation.gtf")
+hg19 = makeTxDbFromGFF(hg19gtf, format="gtf", circ_seqs=character())
+(ebg_hg19 <- exonsBy(hg19, by="gene"))
+seFib <- summarizeOverlaps(features=ebg_hg19, reads=bamfiles,
+                           mode="Union",
+                           singleEnd=TRUE,
+                           ignore.strand=TRUE)
+colData(seFib)
+(colData(seFib) <- DataFrame(sampleTab))
+seFib$condition
+round( colSums(assay(seFib)) / 1e6, 1 )
+
+#deseq:
+dds_fib = DESeqDataSet(seFib, design = ~ condition)
+dds_fib <- dds_fib[ rowSums(counts(dds_fib)) > 1, ]
+dds_fib <- DESeq(dds_fib)
+rownames(dds_fib) = sapply(strsplit(rownames(dds_fib), "[.]"), "[", 1)
+res_fib <- results(dds_fib)
+
+# Explore PCAplots etc interactively:
+pcaExplorer(dds = dds_fib)
+
+#select genes with >10 counts:
+dds_fib10 = DESeqDataSet(seFib, design = ~ condition)
+dds_fib10 <- dds_fib10[ rowSums(counts(dds_fib10)) > 10, ]
+dds_fib10 <- DESeq(dds_fib10)
+rownames(dds_fib10) = sapply(strsplit(rownames(dds_fib10), "[.]"), "[", 1)
+res_fib10 <- results(dds_fib10)
+
+res_fibOrdered <- res_fib[order(res_fib$padj),]
+res_fib10ordered = res_fib10[order(res_fib10$padj),]
+# Export to csv (add common gene names):
+mart_hg19 = useMart(host='grch37.ensembl.org', biomart = "ENSEMBL_MART_ENSEMBL", 
+               dataset = "hsapiens_gene_ensembl")
+res_fibOrdered_df = as.data.frame(res_fibOrdered)
+# res_fibOrdered_df$ensembl = sapply(strsplit(row.names(res_fibOrdered_df), "[.]"), "[", 1)
+res_fibOrdered_df$geneName = NA
+genes_hg19 = rownames(res_fibOrdered_df)
+G_list <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id", 
+                                                          "hgnc_symbol", "description"), values=genes_hg19, mart= mart_hg19)
+res_fibOrdered_df$geneName = G_list$hgnc_symbol[match(rownames(res_fibOrdered_df), G_list$ensembl_gene_id)]
+res_fibOrdered_df$description = G_list$description[match(rownames(res_fibOrdered_df), G_list$ensembl_gene_id)]
+# write.csv(res_fibOrdered_df, file=file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output", 
+#                                                         "LSD1fibDadsKids_deseq2ConditionResult.csv"))
+summary(res_fib)
+
+# How many genes are with padj < 0.01?
+sum(res_fib$padj < 0.01, na.rm=TRUE)
+res_fibSig = subset(res_fibOrdered, padj < 0.01)
+#res_fibSig_df = as.data.frame(res_fibSig)
+#res_fibSig_df$Name = sapply(strsplit(row.names(res_fibSig_df), "[.]"), "[", 1)
+
+# How many genes are with lfcThreshold = 0.5?
+res_fibLFC = results(dds_fib, lfcThreshold = 1)
+summary(res_fibLFC)
+res_fibLFCSig = subset(res_fibLFC, padj < 0.1)
+
+# P-values histogram:
+hist(res_fib$pvalue[res_fib$baseMean > 1], breaks=0:20/20, col="grey50", border="white")
+
+# MA plot:
+plotMA(res_fib, main="LSD1 fibroblasts kids vs dads", ylim=c(-2,2))
+
+#Volcano plot:
+res_fib_df = as.data.frame(res_fib)
+res_fibLFC_df = as.data.frame(res_fibLFCSig)
+ggplot(res_fib_df, aes(x = log2FoldChange, y = -log2(padj))) + geom_point(size = 0.8)
+
+#to mark some gene names:
+res_fib_df$geneName = NA
+genes_hg19 = rownames(res_fib_df)
+G_list <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id", "hgnc_symbol", "description"), values=genes_hg19, mart= mart_hg19)
+res_fib_df$geneName = G_list$hgnc_symbol[match(rownames(res_fib_df), G_list$ensembl_gene_id)]
+
+library(ggrepel)
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "volcanoKid1vsKid2.pdf"), width = 5)
+ggplot(res_fib_df, aes(x = log2FoldChange, y = -log2(padj))) + geom_point(size = 0.6) + geom_point(data = res_fib_df[res_fib_df$padj < 0.01 & abs(res_fib_df$log2FoldChange) > 1,], color = "red", size = 0.7) + geom_text_repel(data = res_fib_df[-log2(res_fib_df$padj) > 125 & abs(res_fib_df$log2FoldChange) > 2,], aes(label = res_fib_df[-log2(res_fib_df$padj) > 125 & abs(res_fib_df$log2FoldChange) > 2,]$geneName), size = 1) + theme_bw()
+dev.off()
+resFibSigLFCdfcc = res_fib_df[res_fib_df$padj < 0.01 & abs(res_fib_df$log2FoldChange) > 1,]
+resFibSigLFCdfcc = resFibSigLFCdfcc[complete.cases(resFibSigLFCdfcc),]
+write.csv(resFibSigLFCdfcc, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output", "resLFCsig_kid1vskid2.csv"))
+
+#same for genes with >10 counts:
+res_fib10_df = as.data.frame(res_fib10)
+#res_fibLFC_df = as.data.frame(res_fibLFCSig)
+res_fib10_df$geneName = NA
+genes_hg19 = rownames(res_fib10_df)
+G_list <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id", "hgnc_symbol", "description"), values=genes_hg19, mart= mart_hg19)
+res_fib10_df$geneName = G_list$hgnc_symbol[match(rownames(res_fib10_df), G_list$ensembl_gene_id)]
+
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "volcanoKid1vsKid2_10counts.pdf"), height = 9)
+ggplot(res_fib10_df, aes(x = log2FoldChange, y = -log2(padj))) + geom_point(size = 0.6) + geom_point(data = res_fib10_df[res_fib10_df$padj < 0.01 & abs(res_fib10_df$log2FoldChange) > 1,], color = "red", size = 0.7) + geom_text_repel(data = res_fib10_df[abs(res_fib10_df$log2FoldChange) > 5 | (-log2(res_fib10_df$padj) > 125 & abs(res_fib10_df$log2FoldChange) > 2),], aes(label = res_fib10_df[abs(res_fib10_df$log2FoldChange) > 5 | (-log2(res_fib10_df$padj) > 125 & abs(res_fib10_df$log2FoldChange) > 2),]$geneName), size = 2) + theme_bw()
+dev.off()
+
+#volcano without labels:
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "volcanoKid1vsKid2_10counts_noLab.pdf"), height = 9)
+ggplot(res_fib10_df, aes(x = log2FoldChange, y = -log2(padj))) + geom_point(size = 0.6) + geom_point(data = res_fib10_df[res_fib10_df$padj < 0.01 & abs(res_fib10_df$log2FoldChange) > 1,], color = "red", size = 0.7) + theme_bw()
+dev.off()
+resFibSigLFC_10c_dfcc = res_fib10_df[res_fib10_df$padj < 0.01 & abs(res_fib10_df$log2FoldChange) > 1,]
+resFibSigLFC_10c_dfcc = resFibSigLFC_10c_dfcc[complete.cases(resFibSigLFC_10c_dfcc),]
+write.csv(resFibSigLFC_10c_dfcc, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output", "resLFCsig_kid1vskid2_10counts.csv"))
+
+resKidsSig = results(dds_fib10, alpha = 0.01, lfcThreshold = 1)
+resKidsSig_df = as.data.frame(resKidsSig)
+resKidsSig_df = resKidsSig_df[complete.cases(resKidsSig_df),] #important!
+summary(resKidsSig)
+length(resKidsSig_df$baseMean[resKidsSig_df$log2FoldChange < 1 & resKidsSig_df$padj < 0.01])
+summary(results(dds_fib10, lfcThreshold = 1, alpha = 0.01))
+resKidsSig_df$geneName = NA
+genes_hg19 = rownames(resKidsSig_df)
+G_list <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id", "hgnc_symbol", "description"), values=genes_hg19, mart= mart_hg19)
+resKidsSig_df$geneName = G_list$hgnc_symbol[match(rownames(resKidsSig_df), G_list$ensembl_gene_id)]
+length(resFibSigLFC_10c_dfcc$baseMean[resFibSigLFC_10c_dfcc$log2FoldChange < 0])
+
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "volcanoKid1vsKid2_10countsSig01.pdf"), height = 9)
+ggplot(resKidsSig_df, aes(x = log2FoldChange, y = -log2(padj))) + geom_point(size = 0.6) + geom_point(data = resKidsSig_df[resKidsSig_df$padj < 0.01 & abs(resKidsSig_df$log2FoldChange) > 1,], color = "red", size = 0.7) + geom_text_repel(data = resKidsSig_df[abs(resKidsSig_df$log2FoldChange) > 5 | (-log2(resKidsSig_df$padj) > 125 & abs(resKidsSig_df$log2FoldChange) > 2),], aes(label = resKidsSig_df[abs(resKidsSig_df$log2FoldChange) > 5 | (-log2(resKidsSig_df$padj) > 125 & abs(resKidsSig_df$log2FoldChange) > 2),]$geneName), size = 2) + theme_bw()
+dev.off()
+
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "volcanoKid1vsKid2_10countsSigNoLab.pdf"), height = 9)
+ggplot(resKidsSig_df, aes(x = log2FoldChange, y = -log2(padj))) + geom_point(size = 0.6) + geom_point(data = resKidsSig_df[resKidsSig_df$padj < 0.01 & abs(resKidsSig_df$log2FoldChange) > 1,], color = "red", size = 0.7) + theme_bw()
+dev.off()
+
+#GO enrichment:
+library(org.Hs.eg.db)
+ds_hg19 = useDataset('hsapiens_gene_ensembl', mart=mart_hg19)
+egs_hg19 = getBM(attributes = c('ensembl_gene_id', 'chromosome_name','start_position', 
+                                'external_gene_name', 'end_position','strand'), mart=ds_hg19)
+kid1vskid2_down <- enrichGO(gene     = unique(row.names(resKidsSig_df[resKidsSig_df$log2FoldChange < 1 & resKidsSig_df$padj < 0.01,])),
+                            universe      = egs_hg19$ensembl_gene_id, #otherwise no GO terms!
+                            OrgDb         = org.Hs.eg.db,
+                            ont           = "CC", keytype = "ENSEMBL",
+                            pAdjustMethod = "BH",
+                            pvalueCutoff  = 0.01,
+                            qvalueCutoff  = 0.05,
+                            readable      = TRUE)
+head(kid1vskid2_down@result)
+options(scipen = 0)
+barplot(kid1vskid2_down, showCategory = 9)
+kid1vskid2_down_s = simplify(kid1vskid2_down, cutoff=0.7, by = "p.adjust", select_fun = min, measure = "Wang")
+barplot(kid1vskid2_down_s)
+
+#same for up genes:
+kid1vskid2_up <- enrichGO(gene     = unique(row.names(resKidsSig_df[resKidsSig_df$log2FoldChange > 1 & resKidsSig_df$padj < 0.01,])),
+                            universe      = egs_hg19$ensembl_gene_id, #otherwise no GO terms!
+                            OrgDb         = org.Hs.eg.db,
+                            ont           = "CC", keytype = "ENSEMBL",
+                            pAdjustMethod = "BH",
+                            pvalueCutoff  = 0.01,
+                            qvalueCutoff  = 0.05,
+                            readable      = TRUE)
+kid1vskid2_up_s = simplify(kid1vskid2_up, cutoff=0.7, by = "p.adjust", select_fun = min, measure = "Wang")
+barplot(kid1vskid2_up)
+#now both barplots to one pdf:
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "GOkid1vskid2_fdr01_bars.pdf"), height = 1.5, width = 5)
+barplot(kid1vskid2_down_s, font.size = 7)
+barplot(kid1vskid2_up, font.size = 7)
+dev.off()
+
+#some gene counts plots:
+resFibSigLFC_10c_dfcc = resKidsSig_df[resKidsSig_df$padj < 0.01 & abs(resKidsSig_df$log2FoldChange) > 1,]
+resFibSigLFC_10c_dfcc = resFibSigLFC_10c_dfcc[complete.cases(resFibSigLFC_10c_dfcc),]
+
+#function:
+plotManyCounts = function(genesTable, withNames = TRUE, ddsObject = dds_ipsc, modRowNames = TRUE, logScale = FALSE) {
+  if (modRowNames == TRUE) {
+  row.names(ddsObject) = sapply(strsplit(rownames(ddsObject), "[.]"), "[", 1)
+  }
+  genesList = rownames(ddsObject)[rownames(ddsObject) %in% genesTable$ensembl_gene_id]
+  d = list()
+  for (i in 1:length(genesList)) { 
+    d[[genesList[[i]]]] <- plotCounts(ddsObject, gene=rownames(ddsObject)[pmatch(genesList[i], rownames(ddsObject))], 
+                         intgroup="condition", returnData=TRUE) 
+    }
+  d_m = do.call(what = cbind, args = d)
+  cols = seq(1,length(genesList)*2,2)
+d_m = d_m[,c(cols, length(genesList)*2)]
+colnames(d_m)[1:length(genesList)] <- sapply(strsplit(colnames(d_m)[1:length(genesList)], "[.]"), "[", 1)
+colnames(d_m)[length(colnames(d_m))] = "condition"
+if (withNames == TRUE) {
+  for (i in 1:length(colnames(d_m)[1:length(genesList)])) {
+    colnames(d_m)[i] = as.character(genesTable[genesTable$ensembl_gene_id %in% colnames(d_m)[i] ,]$external_gene_name)
+  }
+    }
+d_m$id = row.names(d_m)
+d_long = gather(d_m, gene, normExpr, -condition, -id, factor_key = TRUE)
+# ggplot(d_long, aes(x=condition, y=normExpr, fill = gene)) + ggtitle("Expression of genes") +
+#   geom_boxplot()
+if (logScale == TRUE) {
+  ggplot(d_long, aes(x=condition, y=log2(normExpr), colour = id)) + ggtitle("Expression of genes") + 
+  geom_point() + facet_wrap(~gene, scales = "free") + theme_bw()
+}
+else {
+  ggplot(d_long, aes(x=condition, y=normExpr, colour = id)) + ggtitle("Expression of genes") + 
+  geom_point() + facet_wrap(~gene, scales = "free") + theme_bw()
+}
+}
+#
+
+resFibSigLFC_10c_dfcc_sort = resFibSigLFC_10c_dfcc[order(resFibSigLFC_10c_dfcc$log2FoldChange),]
+mostLfcGenes = egs_hg19[egs_hg19$ensembl_gene_id %in% row.names(resFibSigLFC_10c_dfcc_sort[c(1:20, 548:567),]),]
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "kid1vs2_mostLFC_fdr01.pdf"), 
+    width = 12, height = 10)
+plotManyCounts(genesTable = mostLfcGenes, ddsObject = dds_fib10) #many low count ones
+dev.off()
+
+resFibSigLFC_10c_dfcc_sort = resFibSigLFC_10c_dfcc[order(resFibSigLFC_10c_dfcc$padj),]
+mostPAdj = egs_hg19[egs_hg19$ensembl_gene_id %in% row.names(resFibSigLFC_10c_dfcc_sort[1:50,]),]
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "kid1vs2_leastPAdj_fdr01.pdf"), width = 12, height = 10)
+plotManyCounts(genesTable = mostPAdj, ddsObject = dds_fib10)
+dev.off()
+
+#
+#
+#earlier stuff:
+#
+
+upVsdownKids = compareCluster(geneClusters = list(downInKid2 = unique(row.names(resFibSigLFC_10c_dfcc[resFibSigLFC_10c_dfcc$log2FoldChange < 0,])), upInKid2 = unique(row.names(resFibSigLFC_10c_dfcc[resFibSigLFC_10c_dfcc$log2FoldChange > 0,]))), 
+                        fun = "enrichGO", OrgDb = org.Hs.eg.db, universe = egs_hg19$ensembl_gene_id, 
+                        ont = "CC", keytype = "ENSEMBL", pAdjustMethod = "BH", pvalueCutoff  = 0.01, 
+                        qvalueCutoff  = 0.05, readable = TRUE)
+dotplot(upVsdownKids, font.size = 8, showCategory = 10)
+upVsdownKids_simpl = simplify(upVsdownKids, cutoff=0.7, by = "p.adjust", select_fun = min, measure = "Wang")
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "GOterms_kid1vs2.pdf"), width = 6)
+dotplot(upVsdownKids_simpl, font.size = 8, showCategory = 10)
+dev.off()
+
+#plot counts of selected genes:
+dfib <- plotCounts(dds_fib10, gene=which.max(res_fib10$log2FoldChange), intgroup="condition",
+returnData=TRUE)
+ggplot(dfib, aes(x=condition, y=count)) + geom_point() + 
+  ggtitle(res_fib10_df$geneName[which.max(res_fib10_df$log2FoldChange)])
+
+#plot 10 most up/down genes:
+resFibSigLFC_10c_dfcc_sort = resFibSigLFC_10c_dfcc[order(resFibSigLFC_10c_dfcc$log2FoldChange),]
+mostLfcGenes = egs_hg19[egs_hg19$ensembl_gene_id %in% row.names(resFibSigLFC_10c_dfcc_sort[c(1:20, 1691:1710),]),]
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "kid1vs2_mostLFC.pdf"), 
+    width = 12, height = 10)
+plotManyCounts(genesTable = mostLfcGenes, ddsObject = dds_fib10) #many low count ones
+dev.off()
+
+#plot 50 most padj genes:
+resFibSigLFC_10c_dfcc_sort = resFibSigLFC_10c_dfcc[order(resFibSigLFC_10c_dfcc$padj),]
+mostPAdj = egs_hg19[egs_hg19$ensembl_gene_id %in% row.names(resFibSigLFC_10c_dfcc_sort[1:50,]),]
+saveRDS(mostPAdj, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects", "mostPAdj_kid1vskid2.rds"))
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "kid1vs2_leastPAdj.pdf"), width = 12, height = 10)
+plotManyCounts(genesTable = mostPAdj, ddsObject = dds_fib10)
+dev.off()
+
+#once more: kids with 10% fdr and lfc 1:
+seFib = seFib[,5:8]
+colData(seFib) <- DataFrame(data.frame(row.names = c("KSP11", "KSP12", "Proband11", "Proband12"), condition = c(rep("patient", 2), rep("control", 2)), replicate = c(1,2,1,2)))
+
+resFibSigLFC_10c_dfcc = res_fib10_df[res_fib10_df$padj < 0.01 & abs(res_fib10_df$log2FoldChange) > 1,]
+resFibSigLFC_10c_dfcc = resFibSigLFC_10c_dfcc[complete.cases(resFibSigLFC_10c_dfcc),]
+write.csv(resFibSigLFC_10c_dfcc, file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output", "resLFCsig_kid1vskid2_10counts.csv"))
+length(resFibSigLFC_10c_dfcc$baseMean[resFibSigLFC_10c_dfcc$log2FoldChange < 0])
+
+```
+
+Differential genes between dads:
+```{r}
+seFib = readRDS(file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/Robjects", "sumOlapsDadsKidsFib.Rda"))
+colData(seFib)
+#(colData(seFib) <- DataFrame(sampleTab))
+
+seFib_dads = seFib[,1:4]
+seFib_dads
+colData(seFib_dads) <- DataFrame(data.frame(row.names = c("Dad11", "Dad12", "KSF11", "KSF12"), condition = c(rep("control", 2), rep("patient", 2)), replicate = c(1,2,1,2)))
+# colData(seFib_dads)[3:4,1] <- c("patient", "patient")
+
+#deseq:
+dds_fib_dads = DESeqDataSet(seFib_dads, design = ~ condition)
+dds_fib_dads <- dds_fib_dads[ rowSums(counts(dds_fib_dads)) > 10, ]
+dds_fib_dads <- DESeq(dds_fib_dads)
+rownames(dds_fib_dads) = sapply(strsplit(rownames(dds_fib_dads), "[.]"), "[", 1)
+res_fib_dads <- results(dds_fib_dads) #10% FDR
+
+# Explore PCAplots etc interactively:
+#pcaExplorer(dds = dds_fib)
+
+res_fib_dads_df = as.data.frame(res_fib_dads)
+#res_fibLFC_df = as.data.frame(res_fibLFCSig)
+res_fib_dads_df$geneName = NA
+genes_hg19 = rownames(res_fib_dads_df)
+G_list <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id", "hgnc_symbol", "description"), values=genes_hg19, mart= mart_hg19)
+res_fib_dads_df$geneName = G_list$hgnc_symbol[match(rownames(res_fib_dads_df), G_list$ensembl_gene_id)]
+
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "volcanoDad1vsDad2_10counts.pdf"), height = 9)
+ggplot(res_fib_dads_df, aes(x = log2FoldChange, y = -log2(padj))) + geom_point(size = 0.6) + geom_point(data = res_fib_dads_df[res_fib_dads_df$padj < 0.01 & abs(res_fib_dads_df$log2FoldChange) > 1,], color = "red", size = 0.7) + geom_text_repel(data = res_fib_dads_df[abs(res_fib_dads_df$log2FoldChange) > 5 | (-log2(res_fib_dads_df$padj) > 125 & abs(res_fib_dads_df$log2FoldChange) > 2),], aes(label = res_fib_dads_df[abs(res_fib_dads_df$log2FoldChange) > 5 | (-log2(res_fib_dads_df$padj) > 125 & abs(res_fib_dads_df$log2FoldChange) > 2),]$geneName), size = 2) + theme_bw()
+dev.off()
+
+#a bit more labels:
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "volcanoDad1vsDad2_10counts_mod.pdf"), height = 9)
+ggplot(res_fib_dads_df, aes(x = log2FoldChange, y = -log2(padj))) + geom_point(size = 0.6) + geom_point(data = res_fib_dads_df[res_fib_dads_df$padj < 0.01 & abs(res_fib_dads_df$log2FoldChange) > 1,], color = "red", size = 0.7) + geom_text_repel(data = res_fib_dads_df[abs(res_fib_dads_df$log2FoldChange) > 3,], aes(label = res_fib_dads_df[abs(res_fib_dads_df$log2FoldChange) > 3,]$geneName), size = 2) + theme_bw()
+dev.off()
+
+#no labels:
+pdf(file = file.path(dir1, "bunina/LSD1/RNAseq/myRNAseqFibr/output/plots", "volcanoDad1vsDad2_10countsNoLab.pdf"), height = 9)
+ggplot(res_fib_dads_df, aes(x = log2FoldChange, y = -log2(padj))) + geom_point(size = 0.6) + geom_point(data = res_fib_dads_df[res_fib_dads_df$padj < 0.01 & abs(res_fib_dads_df$log2FoldChange) > 1,], color = "red", size = 0.7) + theme_bw()
+dev.off()
+
+resDadsSigLFC_dfcc = res_fib_dads_df[res_fib_dads_df$padj < 0.01 & abs(res_fib_dads_df$log2FoldChange) > 1,]
+resDadsSigLFC_dfcc = resDadsSigLFC_dfcc[complete.cases(resDadsSigLFC_dfcc),]
+length(resDadsSigLFC_dfcc$baseMean[resDadsSigLFC_dfcc$log2FoldChange < 0])
+```
+
+

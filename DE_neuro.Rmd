@@ -1,0 +1,450 @@
+---
+title: "Neuro RNA-seq DE analysis"
+output: html_notebook
+---
+
+-------------------------- Preparation --------------------------
+
+### Install packages from Bioconductor & server path
+```{r}
+# library(BiocInstaller)
+# biocLite(c('GenomicFeatures', "R samtools", "GenomicAlignments", "DESeq2", "clusterProfiler", "org.Hs.eg.db", "apeglm"))
+
+{
+  library(GenomicFeatures)
+  library(Rsamtools)
+  library(GenomicAlignments)
+  library(DESeq2)
+  library(clusterProfiler)
+  library(org.Hs.eg.db)
+  library(ggplot2)
+  library(stringi)
+  library(stringr)
+  library(tidyverse)
+  library(openxlsx)
+  library(dplyr)
+  library(plyr)
+  library(biomaRt)
+}
+
+dir <- "/Volumes/zaugg"
+SAVE_OBJECTS <- TRUE
+```
+
+### Download the gene nomenclature table
+```{r}
+mart_hg19 <- useMart(host='grch37.ensembl.org', biomart = "ENSEMBL_MART_ENSEMBL", dataset = "hsapiens_gene_ensembl")
+ds_hg19 <- useDataset('hsapiens_gene_ensembl', mart=mart_hg19)
+egs_hg19 <- getBM(attributes = c('ensembl_gene_id','entrezgene','chromosome_name','external_gene_name'), mart=ds_hg19)
+```
+
+
+### Get the file names
+```{r}
+countFiles <- list.files(file.path(dir, "bunina/LSD1/differentiation/Neuro/data/bams/"),
+                         pattern = "bam$",
+                         full.names = TRUE
+                         )
+
+X <- basename(countFiles) # Keep only part of path after last "/"
+X <- as.character(X)
+
+X_split <- strsplit(X,"[.]")
+
+countFileSplit <- sapply(X_split,"[[",1)
+```
+
+
+### Construct table describing samples
+```{r}
+cond <- c(rep("control", 10),
+          rep("mutant", 8)
+          )
+repl <- rep(c(1, 2), 9)
+family <- c(rep("A", 6),
+            rep("B", 8),
+            rep("A", 4)
+            )
+individual <- stri_sub(countFileSplit, 1, -2)
+sampleTableLsd <- data.frame(row.names = countFileSplit,
+                             id = countFileSplit,
+                             replicates = repl,
+                             individual,
+                             family = family,
+                             condition = cond
+                             )
+```
+
+
+### Import data
+```{r}
+# gtffile <- file.path(dir, "zaugg_shared/annotations/hg19/Gencode_v19",
+#                      "gencode.v19.annotation.gtf")
+# 
+# txdb <- makeTxDbFromGFF(gtffile,
+#                         format = "gtf",
+#                         circ_seqs = character()
+#                         )
+# 
+# ebg <- exonsBy(txdb,
+#                by="gene"
+# )
+```
+The ```TxDb``` class is a container for storing transcript annotations.
+```makeTxDbFromGFF``` imports genomic features from the ```gtf``` file as a ```GRanges``` object; prepare the 'metadata' data frame; makes the ```TxDb``` object.
+
+
+### Create counts matrix (```RangedSummarizedExperiment``` object)
+```{r}
+# se <- summarizeOverlaps(features = ebg,
+#                         reads = countFiles,
+#                         mode = "Union",
+#                         singleEnd = TRUE,
+#                         ignore.strand = TRUE)
+# 
+# colData(se) = DataFrame(sampleTableLsd)
+# 
+# saveRDS(se,
+#         file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/se.rds")
+# )
+# 
+se <- readRDS(file = file.path(dir1, "oheachte/LSD1/neur_RNAseq/Saved_objects/se.rds"))
+```
+
+
+-------------------------- Analysis --------------------------
+
+### Create ```DESeqDataSet``` object
+```{r}
+dds_neur <- DESeqDataSet(se, design = ~family+condition)
+# 
+dds_counts = counts(dds_neur)
+# 
+dds_neur <- dds_neur[rowSums(dds_counts) >= 30]     # Filter out low count genes
+# dds_counts = counts(dds)
+# 
+dds_neur <- DESeq(dds_neur)
+# rownames(dds) <- sapply(strsplit(rownames(dds), '[.]'), '[[', 1)
+# 
+saveRDS(dds_neur, file = file.path(dir1, "bunina/LSD1/differentiation/dds_neur_new.rds"))
+
+# dds <- readRDS(file = file.path(dir1, "oheachte/LSD1/neur_RNAseq/Saved_objects/dds.rds"))
+```
+
+
+### Extract a ```DESeqResults``` (subclass of ```DataFrame```) table from a DESeq analysis
+```{r}
+dds_res <- results(dds, pAdjustMethod = "BH")
+
+summary(dds_res)
+```
+
+-------------------------- Visualisation --------------------------
+
+
+### MA-plot
+```{r}
+DESeq2::plotMA(dds_res, ylim = c(-5,5))
+
+hist(dds_res$pvalue, main = "p-value distribution", xlab="", col="black", border="white")
+```
+
+### Top up & down genes
+```{r}
+res_sig       <- dds_res[which(dds_res$padj < 0.1),]
+res_sig_up    <- res_sig[which(res_sig$log2FoldChange > 0),]
+res_sig_down  <- res_sig[which(res_sig$log2FoldChange < 0),]
+
+res_sig_ord       <- res_sig[order(res_sig$log2FoldChange, decreasing = TRUE),]
+res_sig_up_ord    <- res_sig_up[order(res_sig_up$log2FoldChange, decreasing = TRUE),]
+res_sig_down_ord  <- res_sig_down[order(res_sig_down$log2FoldChange, decreasing = FALSE),]
+
+top_names       <- rownames(res_sig_ord)
+top_names_up    <- rownames(res_sig_up_ord)
+top_names_down  <- rownames(res_sig_down_ord)
+
+# matches <- match(top_names, egs_hg19$ensembl_gene_id) # Locate indices of genes in table
+# top_names <- egs_hg19$external_gene_name[matches] # Gene names
+# matches <- match(top_names_up, egs_hg19$ensembl_gene_id) # Repeat
+# top_names_up <- egs_hg19$external_gene_name[matches] # Gene names
+# matches <- match(top_names_down, egs_hg19$ensembl_gene_id) # Repeat
+# top_names_down <- egs_hg19$external_gene_name[matches] # Gene names
+
+
+# top_LFC_up <- head(res_up_ord$log2FoldChange, n) # Corresponding LFCs
+# top_padj_up <- head(res_up_ord$padj, n) # Corresponding adjusted p-values
+# 
+# barplot(top_LFC_up, horiz = FALSE,
+#         names.arg = head(top_names_up, n), cex.names = 0.5,
+#         main = 'LFC of most up-expressed genes', las = 2, border = "white", col = 'brown3')
+```
+
+
+### SAVE TOP OBJECTS
+```{r}
+if(SAVE_OBJECTS == TRUE){
+  saveRDS(top_names,
+          file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/top_names/top_names.rds"))
+  saveRDS(top_names_up,
+          file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/top_names/top_names_up.rds"))
+  saveRDS(top_names_down,
+          file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/top_names/top_names_down.rds"))
+  write.csv(top_names,
+          file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/top_names/top_names.csv"))
+  write.csv(top_names_up,
+          file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/top_names/top_names_up.csv"))
+  write.csv(top_names_down,
+          file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/top_names/top_names_down.csv"))
+}
+```
+
+
+### Plots
+```{r}
+m <- 20 # number of genes to visualise
+dds_res_sig <- dds_res[which(dds_res$padj < 0.1),]
+
+abs            <- abs(dds_res_sig$log2FoldChange)
+ord_LFC        <- order(abs, decreasing = TRUE)
+ord_LFC        <- head(ord_LFC, m) # row indices for lowest padj values
+ord_LFC_genes  <- rownames(dds_res_sig)[ord_LFC] # genes with highest abs(LFC) values
+
+ord_LFC_genes
+counts_top     <- counts(dds, normalized = TRUE)[ord_LFC_genes,]
+
+matches               <- match(ord_LFC_genes, egs_hg19$ensembl_gene_id) # Locate indices of genes in table
+ord_LFC_genes_sym     <- egs_hg19$external_gene_name[matches] # Gene names
+rownames(counts_top)  <- ord_LFC_genes_sym
+
+counts_top                <- data.frame(t(counts_top))
+counts_top                <- cbind(rownames(counts_top), counts_top)
+colnames(counts_top)[1]   <- "sample"
+rownames(counts_top)      <- c()
+df <- gather(counts_top,
+             "gene",
+             "count",
+             2:(m+1))
+# df$gene <- factor(df$gene, levels = as.character(ord_LFC_genes_sym))
+
+df_plot           <- cbind(df,
+                           rep(cond, m),
+                           rep(individual, m))
+colnames(df_plot) <- c("sample", "gene", "count", "condition", "Biol_rep")
+
+ggp <- ggplot(df_plot,
+              aes(x = condition,
+                  y = count,
+                  col = Biol_rep)) +
+  geom_jitter(width = 0.05,
+              height = 0) +
+  facet_wrap(~ gene,
+             ncol = 5,
+             scales = "free_y")
+
+ggp
+
+```
+
+### Variance stabilisation transformation
+```{r}
+vst_dds <- varianceStabilizingTransformation(dds,
+                                             blind = FALSE)
+head(assay(vst_dds), 5)
+```
+
+### PCA
+```{r}
+dataPCA <- plotPCA(vst_dds,
+                   intgroup = c("condition", "family"),
+                   returnData = TRUE,
+                   ntop = 500
+                   )
+percentVar <- round(100 * attr(dataPCA, "percentVar"))
+
+p = ggplot() +
+  geom_point(data = dataPCA,
+             mapping = aes(PC1, PC2, color=family, shape = condition),
+             size=3) + 
+  scale_shape_manual(values = 1:9) + 
+  theme(aspect.ratio=0.8, plot.title = element_text(hjust = 0.5, face = "bold")) + 
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) + 
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  theme_bw() #coord_fixed() + 
+
+pdf(file = file.path(dir1, "bunina/LSD1/differentiation", "PCA_neuro.pdf"), width = 6, height = 4.5, useDingbats = FALSE)
+p
+dev.off()
+```
+### Top genes contributing to PCs (PCA above)
+```{r}
+# Now we'll find the top genes contributing to the top PCs (largest coefficients in lin. comb.)
+
+#############
+# Functions #
+#############
+
+pcaAndrew <- function(object, ntop = 500) {
+    rv <- rowVars(assay(object))
+    select <- order(rv, decreasing = TRUE)[seq_len(min(ntop, length(rv)))]
+    pca <- prcomp(t(assay(object)[select, ]))
+    pca
+} # returns PCA object on top 500 most variable genes
+
+loadedGenes <- function(pca, PC, numGenes, up_or_down){
+  if (up_or_down == "up"){
+    genes <- pca$rotation[,PC] %>% order(., decreasing = TRUE) %>% rownames(pca$rotation)[.]
+    return(genes[1:numGenes])
+  } else if (up_or_down == "down"){
+    genes <- pca$rotation[,PC] %>% order(., decreasing = FALSE) %>% rownames(pca$rotation)[.]
+    return(genes[1:numGenes])
+  } else {
+    stop("Argument must be 'up' or 'down'.")
+  }
+} # returns character vector of top genes contributing to PC
+
+translate <- function(IDs){
+  match <- match(IDs, egs_hg19$ensembl_gene_id)
+  egs_hg19$external_gene_name[match]
+} # translates ENSEMBL IDs to common gene names
+
+pcaObj <- pcaAndrew(vst_dds,
+                    ntop = 500
+                    )
+
+plot(as.numeric(pcaObj$rotation[,"PC1"]))  # background for GO enrichment
+
+allGenes <- rownames(dds_res)
+df_summary <- tibble( PC = character(), gene = character(), ENSEMBL = character(), UpDown = character(), PC_coef = numeric() )  # initiate
+pdf(file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/goObj_PCA/dotplots.pdf"))
+for (PC in c("PC1", "PC2", "PC3", "PC4")){
+  # up   <- loadedGenes(pcaObj, PC, 50, "up")
+  # down <- loadedGenes(pcaObj, PC, 50, "down")
+  # up_weights <- match(up, rownames(pcaObj$rotation)) %>% pcaObj$rotation[., PC]
+  # down_weights <- match(down, rownames(pcaObj$rotation)) %>% pcaObj$rotation[., PC]
+  # 
+  # geneList <- list(up = up,
+  #                  down = down
+  #                  )  # inputs for GO enrichment
+  # 
+  # goBP_PC <- clusterProfiler::compareCluster(geneClusters = geneList,
+  #                                            fun = "enrichGO",
+  #                                            keyType = "ENSEMBL",
+  #                                            OrgDb = org.Hs.eg.db,
+  #                                            ont = "BP",
+  #                                            universe = allGenes
+  #                                            )  # GO object
+  # 
+  # saveRDS(goBP_PC, file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/goObj_PCA", paste0("goBP_", PC, ".rds")
+  #                                   )
+  #         )
+  goBP_PC <- readRDS(file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/goObj_PCA", paste0("goBP_", PC, ".rds")
+                                     )
+                    )
+  
+  # df_summary <- tibble(PC = PC, gene = translate(up), ENSEMBL = up, UpDown = "up", PC_coef = up_weights)          %>% rbind(df_summary, .)
+  # df_summary <- tibble(PC = PC, gene = translate(down), ENSEMBL = down, UpDown = "down", PC_coef = down_weights)  %>% rbind(df_summary, .)
+  
+  dotplot(goBP_PC,
+          color = "p.adjust",
+          showCategory = 20,
+          by = "geneRatio",
+          title = paste0("GO (BP), ", PC),
+          font.size = 8
+          ) %>% plot
+  
+  beep(5)
+}
+dev.off()
+
+beep(8)
+
+# df_summary <- cbind(tissue = "neur", df_summary)
+# write.csv(df_summary,
+#           file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/goObj_PCA/genesWithLargestPCcoefs.csv")
+#           )
+
+# translate(c(loadedGenes(pcaObj, "PC1", 20, "up"), "NA", loadedGenes(pcaObj, "PC1", 20, "down")))
+
+# goBP_PC1 <- readRDS(file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/goObj_PCA", paste0("goBP_", "PC1", ".rds")
+#                                      )
+#                     )
+```
+
+
+```{r}
+allGenes <- rownames(dds_res)
+
+geneList <- list(up = top_names_up, down = top_names_down)
+```
+
+### GO enrichment analysis (MF)
+```{r}
+# goObj_MF <- clusterProfiler::compareCluster(geneClusters = geneList,
+#                                             fun = "enrichGO",
+#                                             keyType = "ENSEMBL",
+#                                             OrgDb = org.Hs.eg.db,
+#                                             ont = "MF",
+#                                             universe = allGenes
+#                                             )
+# 
+# saveRDS(goObj_MF, file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/goObj_MF.rds"))
+
+goObj_MF <- readRDS(file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/goObj_MF.rds"))
+
+dotplot(goObj_MF,
+        color = "p.adjust",
+        showCategory = 10,
+        by = "geneRatio",
+        title = "GO (MF) Enrichment",
+        font.size = 10
+        )
+```
+
+### GO enrichment analysis (BP)
+```{r}
+# goObj_BP <- clusterProfiler::compareCluster(geneClusters = geneList,
+#                                             fun = "enrichGO",
+#                                             keyType = "ENSEMBL",
+#                                             OrgDb = org.Hs.eg.db,
+#                                             ont = "BP",
+#                                             universe = allGenes
+#                                             )
+# 
+# saveRDS(goObj_BP, file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/goObj_BP.rds"))
+
+goObj_BP <- readRDS(file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/goObj_BP.rds"))
+
+dotplot(goObj_BP,
+        color = "p.adjust",
+        showCategory = 25,
+        by = "geneRatio",
+        title = "GO (BP) Enrichment",
+        font.size = 8
+        )
+```
+
+### GO enrichment analysis (CC)
+```{r}
+# goObj_CC <- clusterProfiler::compareCluster(geneClusters = geneList,
+#                                             fun = "enrichGO",
+#                                             keyType = "ENSEMBL",
+#                                             OrgDb = org.Hs.eg.db,
+#                                             ont = "CC",
+#                                             universe = allGenes
+#                                             )
+# 
+# saveRDS(goObj_CC, file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/goObj_CC.rds"))
+
+goObj_CC <- readRDS(file = file.path(dir, "oheachte/LSD1/neur_RNAseq/Saved_objects/goObj_CC.rds"))
+
+dotplot(goObj_CC,
+        color = "p.adjust",
+        showCategory = 10,
+        by = "geneRatio",
+        title = "GO (CC) Enrichment",
+        font.size = 10
+        )
+```
+
+
+
